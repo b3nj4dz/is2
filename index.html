@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sistema de Gestión de Turnos - Copec</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- CSS Personalizado -->
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="bg-slate-100 text-slate-800 flex flex-col min-h-screen">
+
+  <!-- NOTIFICACIONES TOAST -->
+  <div id="toast" class="fixed bottom-4 right-4 bg-slate-900 text-white px-4 py-2.5 rounded-lg shadow-lg text-sm z-50 hidden flex items-center gap-2">
+    <i data-lucide="check-circle" class="w-4 h-4 text-emerald-400"></i>
+    <span id="toast-msg">Notificación</span>
+  </div>
+
+  <!-- PANTALLA DE LOGIN -->
+  <div id="sec-login" class="flex-1 flex items-center justify-center p-4">
+    <div class="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full border border-slate-200 space-y-6">
+      <div class="text-center space-y-2">
+        <div class="inline-block bg-red-700 text-white font-black px-4 py-1.5 rounded text-2xl tracking-wider mb-2">COPEC</div>
+        <h2 class="text-xl font-bold text-slate-800">Iniciar Sesión</h2>
+        <p class="text-xs text-slate-500">Ingresa tus credenciales para acceder a la plataforma.</p>
+      </div>
+
+      <form id="form-login" onsubmit="iniciarSesion(event)" class="space-y-4 text-xs">
+        <div>
+          <label class="font-bold block mb-1 text-slate-700">Correo Electrónico</label>
+          <input type="email" id="login-email" required placeholder="nombre.apellido@copec.cl" class="w-full p-3 border rounded-lg bg-slate-50 focus:bg-white focus:ring-2 focus:ring-red-600 outline-none transition">
+        </div>
+        <div>
+          <label class="font-bold block mb-1 text-slate-700">Contraseña</label>
+          <input type="password" id="login-password" required placeholder="••••••••" class="w-full p-3 border rounded-lg bg-slate-50 focus:bg-white focus:ring-2 focus:ring-red-600 outline-none transition">
+        </div>
+        <button type="submit" class="w-full bg-red-700 hover:bg-red-800 text-white font-bold py-3 rounded-lg text-sm transition shadow-md">
+          Ingresar al Sistema
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- CONTENEDOR PRINCIPAL DEL SISTEMA -->
+  <div id="sec-app" class="hidden flex-1 flex flex-col">
+    <!-- HEADER CORPORATIVO COPEC -->
+    <header class="bg-red-700 text-white shadow">
+      <div class="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
+        <div class="flex items-center space-x-3">
+          <div class="bg-white text-red-700 font-black px-2.5 py-1 rounded text-xl tracking-wider">COPEC</div>
+          <div>
+            <h1 class="font-bold text-base leading-tight">Gestión de Turnos</h1>
+            <p class="text-[11px] text-red-100 font-medium" id="usuario-sesion-txt">Panel de Administración</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-3">
+          <button onclick="compartirEnlace()" class="bg-red-800 hover:bg-red-900 text-white px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition">
+            <i data-lucide="share-2" class="w-3.5 h-3.5"></i> Compartir Horario
+          </button>
+          <button onclick="cerrarSesion()" class="bg-slate-900 hover:bg-black text-white px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition">
+            <i data-lucide="log-out" class="w-3.5 h-3.5"></i> Salir
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- CONTENIDO PRINCIPAL -->
+    <main class="flex-1 max-w-6xl w-full mx-auto p-4 space-y-4">
+
+      <!-- Navegación por Pestañas -->
+      <div class="flex border-b border-slate-200 bg-white rounded-t-xl px-2 pt-2 shadow-sm">
+        <button onclick="cambiarTab('turnos')" id="tab-turnos" class="px-4 py-2.5 text-xs sm:text-sm font-bold border-b-2 border-red-600 text-red-600 flex items-center gap-2 transition">
+          <i data-lucide="calendar" class="w-4 h-4"></i> Cuadrante de Turnos
+        </button>
+        <button onclick="cambiarTab('empleados')" id="tab-empleados" class="px-4 py-2.5 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-500 hover:text-slate-700 flex items-center gap-2 transition">
+          <i data-lucide="users" class="w-4 h-4"></i> Personal y Licencias
+        </button>
+        <button onclick="cambiarTab('asistencia')" id="tab-asistencia" class="px-4 py-2.5 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-500 hover:text-slate-700 flex items-center gap-2 transition">
+          <i data-lucide="file-spreadsheet" class="w-4 h-4"></i> Libro de Asistencia
+        </button>
+      </div>
+
+      <!-- PESTAÑA 1: CUADRANTE DE TURNOS -->
+      <section id="sec-turnos" class="bg-white p-4 rounded-b-xl rounded-tr-xl border border-slate-200 shadow-sm space-y-4">
+        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-slate-50 p-3.5 rounded-lg border border-slate-200">
+          <div>
+            <h2 class="font-bold text-sm text-slate-800">Distribución Semanal de Atendedores</h2>
+            <p class="text-xs text-slate-500" id="cuadrante-subtitulo">Selecciona el turno directamente en cada casilla para ajustar la asignación.</p>
+          </div>
+          <div class="flex items-center gap-2" id="cnt-btn-auto">
+            <button onclick="generarTurnosAuto()" class="bg-red-600 hover:bg-red-700 text-white font-bold px-3.5 py-2 rounded-lg text-xs flex items-center gap-1.5 shadow-sm transition">
+              <i data-lucide="zap" class="w-4 h-4"></i> Generar Automáticamente
+            </button>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap gap-2 text-[11px] font-semibold text-slate-600">
+          <span class="px-2 py-1 rounded bg-amber-100 text-amber-800 border border-amber-300">Mañana (07:00 - 15:00)</span>
+          <span class="px-2 py-1 rounded bg-blue-100 text-blue-800 border border-blue-300">Tarde (15:00 - 23:00)</span>
+          <span class="px-2 py-1 rounded bg-purple-100 text-purple-800 border border-purple-300">Noche (23:00 - 07:00)</span>
+          <span class="px-2 py-1 rounded bg-slate-100 text-slate-600 border border-slate-300">Libre (Descanso)</span>
+        </div>
+
+        <div class="overflow-x-auto rounded-lg border border-slate-200">
+          <table class="w-full text-left text-xs border-collapse">
+            <thead>
+              <tr class="bg-slate-800 text-white">
+                <th class="p-3 font-bold w-44">Atendedor</th>
+                <th class="p-3 font-semibold text-center min-w-[110px]">Lunes</th>
+                <th class="p-3 font-semibold text-center min-w-[110px]">Martes</th>
+                <th class="p-3 font-semibold text-center min-w-[110px]">Miércoles</th>
+                <th class="p-3 font-semibold text-center min-w-[110px]">Jueves</th>
+                <th class="p-3 font-semibold text-center min-w-[110px]">Viernes</th>
+                <th class="p-3 font-semibold text-center min-w-[110px]">Sábado</th>
+                <th class="p-3 font-semibold text-center min-w-[110px]">Domingo</th>
+              </tr>
+            </thead>
+            <tbody id="tabla-turnos-body" class="divide-y divide-slate-200 bg-white"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- PESTAÑA 2: GESTIÓN DE PERSONAL Y LICENCIAS (Solo Admin) -->
+      <section id="sec-empleados" class="bg-white p-4 rounded-b-xl rounded-tr-xl border border-slate-200 shadow-sm space-y-4 hidden">
+        <div class="flex justify-between items-center">
+          <div>
+            <h2 class="font-bold text-sm text-slate-800">Nómina de Personal</h2>
+            <p class="text-xs text-slate-500">Administra atendedores y registra licencias o incapacidades médicas.</p>
+          </div>
+          <button onclick="agregarEmpleadoModal()" class="bg-red-600 hover:bg-red-700 text-white font-bold px-3.5 py-2 rounded-lg text-xs flex items-center gap-1.5 shadow-sm transition">
+            <i data-lucide="plus" class="w-4 h-4"></i> Agregar Atendedor
+          </button>
+        </div>
+
+        <div class="overflow-x-auto rounded-lg border border-slate-200">
+          <table class="w-full text-left text-xs">
+            <thead class="bg-slate-100 font-bold text-slate-700 border-b border-slate-200">
+              <tr>
+                <th class="p-3">RUT</th>
+                <th class="p-3">Nombre Completo</th>
+                <th class="p-3">Estado de Licencia</th>
+                <th class="p-3 text-center">Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="tabla-empleados-body" class="divide-y divide-slate-200 bg-white"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- PESTAÑA 3: ASISTENCIA (Solo Admin) -->
+      <section id="sec-asistencia" class="bg-white p-4 rounded-b-xl rounded-tr-xl border border-slate-200 shadow-sm space-y-4 hidden">
+        <div>
+          <h2 class="font-bold text-sm text-slate-800">Transcripción de Libro de Asistencia Físico</h2>
+          <p class="text-xs text-slate-500">Registra manualmente las horas ordinarias y extras marcadas en el libro.</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <form id="form-asistencia" onsubmit="guardarAsistencia(event)" class="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3 text-xs">
+            <div>
+              <label class="font-bold block mb-1 text-slate-700">Atendedor</label>
+              <select id="asist-emp" required class="w-full p-2 border rounded-md bg-white"></select>
+            </div>
+            <div>
+              <label class="font-bold block mb-1 text-slate-700">Fecha y N° de Foja</label>
+              <div class="flex gap-2">
+                <input type="date" id="asist-fecha" required class="w-full p-2 border rounded-md bg-white">
+                <input type="text" id="asist-foja" placeholder="Foja N°" required class="w-28 p-2 border rounded-md bg-white">
+              </div>
+            </div>
+            <div class="flex gap-2">
+              <div class="w-1/2">
+                <label class="font-bold block mb-1 text-slate-700">Horas Norm.</label>
+                <input type="number" step="0.5" id="asist-ord" value="8" required class="w-full p-2 border rounded-md bg-white">
+              </div>
+              <div class="w-1/2">
+                <label class="font-bold block mb-1 text-slate-700">Horas Extra</label>
+                <input type="number" step="0.5" id="asist-ext" value="0" required class="w-full p-2 border rounded-md bg-white">
+              </div>
+            </div>
+            <button type="submit" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 rounded-lg transition shadow-sm">
+              Guardar Registro
+            </button>
+          </form>
+
+          <div class="md:col-span-2 border rounded-xl overflow-hidden">
+            <table class="w-full text-left text-xs">
+              <thead class="bg-slate-100 font-bold border-b border-slate-200">
+                <tr>
+                  <th class="p-3">Fecha</th>
+                  <th class="p-3">Atendedor</th>
+                  <th class="p-3">H. Ordinarias</th>
+                  <th class="p-3">H. Extras</th>
+                  <th class="p-3">Foja Libro</th>
+                </tr>
+              </thead>
+              <tbody id="tabla-asistencia-body" class="divide-y divide-slate-200 bg-white"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <footer class="bg-slate-900 text-slate-400 py-3 text-center text-xs mt-auto border-t border-slate-800">
+      COPEC S.A. • Sistema de Gestión de Turnos para Estaciones de Servicio • 2026
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
