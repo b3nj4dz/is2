@@ -8,7 +8,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(__dirname));
 
-// Conexión a MariaDB / MySQL en XAMPP
+// Conexión directa a MariaDB en XAMPP
 const db = mysql.createConnection({
   host: 'localhost',
   user: 'root',

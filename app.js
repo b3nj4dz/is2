@@ -83,14 +83,12 @@ function aplicarPermisosPorRol() {
   const cuadranteSubtitulo = document.getElementById('cuadrante-subtitulo');
 
   if (!esAdmin) {
-    // Si es ATENDEDOR: Ocultar pestañas de administración y botón automático
     if (tabEmpleados) tabEmpleados.classList.add('hidden');
     if (tabAsistencia) tabAsistencia.classList.add('hidden');
     if (btnAuto) btnAuto.classList.add('hidden');
     if (cuadranteSubtitulo) cuadranteSubtitulo.textContent = 'Consulta la programación y turnos de la semana.';
     cambiarTab('turnos');
   } else {
-    // Si es ADMINISTRADOR: Mostrar todo el panel
     if (tabEmpleados) tabEmpleados.classList.remove('hidden');
     if (tabAsistencia) tabAsistencia.classList.remove('hidden');
     if (btnAuto) btnAuto.classList.remove('hidden');
@@ -106,7 +104,7 @@ function cerrarSesion() {
   mostrarToast('Sesión cerrada correctamente');
 }
 
-// --- GESTIÓN DE EMPLEADOS ---
+// --- GESTIÓN DE EMPLEADOS Y BUSCADOR ---
 
 async function cargarEmpleadosBD() {
   try {
@@ -120,6 +118,59 @@ async function cargarEmpleadosBD() {
   } catch (err) {
     console.error('Error al cargar empleados:', err);
   }
+}
+
+function renderizarEmpleados(listaFiltro = null) {
+  const tbody = document.getElementById('tabla-empleados-body');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  const listaAMostrar = listaFiltro || empleados;
+
+  if (listaAMostrar.length === 0) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="4" class="p-4 text-center text-slate-400 italic">
+          No se encontraron atendedores que coincidan con la búsqueda.
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  listaAMostrar.forEach(e => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="p-3 font-mono">${e.rut}</td>
+      <td class="p-3 font-bold">${e.nombre}</td>
+      <td class="p-3">
+        ${e.licencia 
+          ? '<span class="bg-amber-100 text-amber-800 px-2 py-0.5 rounded text-[11px] font-bold border border-amber-300">Licencia Médica</span>'
+          : '<span class="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-[11px] font-bold border border-emerald-300">Activo</span>'
+        }
+      </td>
+      <td class="p-3 text-center space-x-2">
+        <button onclick="toggleLicencia(${e.id})" class="text-xs bg-slate-100 hover:bg-slate-200 border px-2.5 py-1 rounded font-medium transition">
+          ${e.licencia ? 'Quitar Licencia' : 'Marcar Licencia'}
+        </button>
+        <button onclick="eliminarEmpleado(${e.id})" class="text-rose-600 hover:text-rose-800 p-1 rounded transition">
+          <i data-lucide="trash-2" class="w-4 h-4 inline"></i>
+        </button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+  lucide.createIcons();
+}
+
+// Función de filtro dinámico para la Lupa
+function filtrarEmpleados() {
+  const textoInput = document.getElementById('input-buscar-empleado').value.toLowerCase().trim();
+  const empleadosFiltrados = empleados.filter(e => 
+    e.nombre.toLowerCase().includes(textoInput) || 
+    e.rut.toLowerCase().includes(textoInput)
+  );
+  renderizarEmpleados(empleadosFiltrados);
 }
 
 async function agregarEmpleadoModal() {
@@ -151,36 +202,6 @@ async function agregarEmpleadoModal() {
     console.error('Error de conexión:', err);
     alert('No se pudo conectar con el servidor.');
   }
-}
-
-function renderizarEmpleados() {
-  const tbody = document.getElementById('tabla-empleados-body');
-  if (!tbody) return;
-  tbody.innerHTML = '';
-
-  empleados.forEach(e => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td class="p-3 font-mono">${e.rut}</td>
-      <td class="p-3 font-bold">${e.nombre}</td>
-      <td class="p-3">
-        ${e.licencia 
-          ? '<span class="bg-amber-100 text-amber-800 px-2 py-0.5 rounded text-[11px] font-bold border border-amber-300">Licencia Médica</span>'
-          : '<span class="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-[11px] font-bold border border-emerald-300">Activo</span>'
-        }
-      </td>
-      <td class="p-3 text-center space-x-2">
-        <button onclick="toggleLicencia(${e.id})" class="text-xs bg-slate-100 hover:bg-slate-200 border px-2.5 py-1 rounded font-medium transition">
-          ${e.licencia ? 'Quitar Licencia' : 'Marcar Licencia'}
-        </button>
-        <button onclick="eliminarEmpleado(${e.id})" class="text-rose-600 hover:text-rose-800 p-1 rounded transition">
-          <i data-lucide="trash-2" class="w-4 h-4 inline"></i>
-        </button>
-      </td>
-    `;
-    tbody.appendChild(tr);
-  });
-  lucide.createIcons();
 }
 
 async function toggleLicencia(id) {
@@ -272,7 +293,6 @@ function renderizarCuadrante() {
         htmlCells += `<td class="p-2 text-center border-r border-slate-100 text-slate-400 italic text-[11px]">Licencia</td>`;
       } else {
         if (esAdmin) {
-          // Si es ADMIN: Puede editar el turno
           htmlCells += `
             <td class="p-1.5 border-r border-slate-100">
               <select onchange="cambiarTurnoManual(${emp.id}, ${dIdx}, this.value)" 
@@ -285,7 +305,6 @@ function renderizarCuadrante() {
             </td>
           `;
         } else {
-          // Si es ATENDEDOR: Solo ver el turno (Sin lista desplegable)
           const formatoNombre = tActual.charAt(0).toUpperCase() + tActual.slice(1);
           htmlCells += `
             <td class="p-2 text-center border-r border-slate-100">

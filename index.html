@@ -123,16 +123,25 @@
         </div>
       </section>
 
-      <!-- PESTAÑA 2: GESTIÓN DE PERSONAL Y LICENCIAS (Solo Admin) -->
+      <!-- PESTAÑA 2: GESTIÓN DE PERSONAL Y LICENCIAS -->
       <section id="sec-empleados" class="bg-white p-4 rounded-b-xl rounded-tr-xl border border-slate-200 shadow-sm space-y-4 hidden">
-        <div class="flex justify-between items-center">
+        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
           <div>
             <h2 class="font-bold text-sm text-slate-800">Nómina de Personal</h2>
             <p class="text-xs text-slate-500">Administra atendedores y registra licencias o incapacidades médicas.</p>
           </div>
-          <button onclick="agregarEmpleadoModal()" class="bg-red-600 hover:bg-red-700 text-white font-bold px-3.5 py-2 rounded-lg text-xs flex items-center gap-1.5 shadow-sm transition">
-            <i data-lucide="plus" class="w-4 h-4"></i> Agregar Atendedor
-          </button>
+
+          <div class="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+            <!-- BUSCADOR CON LUPA -->
+            <div class="relative flex-1 sm:w-64">
+              <i data-lucide="search" class="w-4 h-4 absolute left-3 top-2.5 text-slate-400"></i>
+              <input type="text" id="input-buscar-empleado" oninput="filtrarEmpleados()" placeholder="Buscar por nombre o RUT..." class="w-full text-xs pl-9 pr-3 py-2 border border-slate-300 rounded-lg bg-slate-50 focus:bg-white focus:ring-2 focus:ring-red-600 outline-none transition">
+            </div>
+
+            <button onclick="agregarEmpleadoModal()" class="bg-red-600 hover:bg-red-700 text-white font-bold px-3.5 py-2 rounded-lg text-xs flex items-center gap-1.5 shadow-sm transition">
+              <i data-lucide="plus" class="w-4 h-4"></i> Agregar Atendedor
+            </button>
+          </div>
         </div>
 
         <div class="overflow-x-auto rounded-lg border border-slate-200">
@@ -150,7 +159,7 @@
         </div>
       </section>
 
-      <!-- PESTAÑA 3: ASISTENCIA (Solo Admin) -->
+      <!-- PESTAÑA 3: ASISTENCIA -->
       <section id="sec-asistencia" class="bg-white p-4 rounded-b-xl rounded-tr-xl border border-slate-200 shadow-sm space-y-4 hidden">
         <div>
           <h2 class="font-bold text-sm text-slate-800">Transcripción de Libro de Asistencia Físico</h2>
