@@ -9,3 +9,12 @@ node server.js
 
 # 3. Abrir en el navegador
 http://localhost:3000
+
+# 4. User de admin
+admin@copec.cl
+admin123
+
+# 5. User de usuario (sirve cualquiera)
+juan.perez@copec.cl
+123456
+
