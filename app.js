@@ -9,8 +9,10 @@ const TURNOS_ESTILOS = {
 const DIAS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
 let empleados = [];
+let administradores = [];
 let horarios = {};
 let asistencias = [];
+let solicitudes = [];
 let usuarioActual = null;
 
 const API_URL = 'http://localhost:3000/api';
@@ -31,6 +33,7 @@ async function iniciarSesion(e) {
   e.preventDefault();
   const email = document.getElementById('login-email').value;
   const password = document.getElementById('login-password').value;
+  document.getElementById('btn-solicitar-desbloqueo').classList.add('hidden');
 
   try {
     const res = await fetch(`${API_URL}/login`, {
@@ -47,11 +50,39 @@ async function iniciarSesion(e) {
       mostrarToast(`Bienvenido/a ${usuarioActual.nombre}`);
       mostrarPanelPrincipal();
     } else {
+      if (data.bloqueado) {
+        document.getElementById('btn-solicitar-desbloqueo').classList.remove('hidden');
+      }
       alert(data.error || 'Credenciales incorrectas');
     }
   } catch (err) {
     console.error('Error en login:', err);
     alert('Error de conexión con el servidor');
+  }
+}
+
+async function solicitarDesbloqueo() {
+  const email = document.getElementById('login-email').value.trim();
+  if (!email) {
+    alert('Ingresa el correo de la cuenta bloqueada.');
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_URL}/solicitudes-desbloqueo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.error || 'No se pudo enviar la solicitud.');
+      return;
+    }
+    mostrarToast(data.message);
+  } catch (err) {
+    console.error('Error al solicitar desbloqueo:', err);
+    alert('No se pudo conectar con el servidor.');
   }
 }
 
@@ -72,6 +103,12 @@ function mostrarPanelPrincipal() {
   if (inputFecha) inputFecha.valueAsDate = new Date();
 
   cargarEmpleadosBD();
+  if (usuarioActual && usuarioActual.rol === 'admin') {
+    cargarAdministradoresBD();
+    cargarSolicitudesDesbloqueo();
+    cargarAsistenciasBD();
+  }
+  cargarSolicitudes();
 }
 
 function aplicarPermisosPorRol() {
@@ -79,18 +116,21 @@ function aplicarPermisosPorRol() {
 
   const tabEmpleados = document.getElementById('tab-empleados');
   const tabAsistencia = document.getElementById('tab-asistencia');
+  const secAdministradores = document.getElementById('sec-administradores');
   const btnAuto = document.getElementById('cnt-btn-auto');
   const cuadranteSubtitulo = document.getElementById('cuadrante-subtitulo');
 
   if (!esAdmin) {
     if (tabEmpleados) tabEmpleados.classList.add('hidden');
     if (tabAsistencia) tabAsistencia.classList.add('hidden');
+    if (secAdministradores) secAdministradores.classList.add('hidden');
     if (btnAuto) btnAuto.classList.add('hidden');
     if (cuadranteSubtitulo) cuadranteSubtitulo.textContent = 'Consulta la programación y turnos de la semana.';
     cambiarTab('turnos');
   } else {
     if (tabEmpleados) tabEmpleados.classList.remove('hidden');
     if (tabAsistencia) tabAsistencia.classList.remove('hidden');
+    if (secAdministradores) secAdministradores.classList.remove('hidden');
     if (btnAuto) btnAuto.classList.remove('hidden');
     if (cuadranteSubtitulo) cuadranteSubtitulo.textContent = 'Selecciona el turno directamente en cada casilla para ajustar la asignación.';
   }
@@ -130,7 +170,7 @@ function renderizarEmpleados(listaFiltro = null) {
   if (listaAMostrar.length === 0) {
     tbody.innerHTML = `
       <tr>
-        <td colspan="4" class="p-4 text-center text-slate-400 italic">
+        <td colspan="5" class="p-4 text-center text-slate-400 italic">
           No se encontraron atendedores que coincidan con la búsqueda.
         </td>
       </tr>
@@ -143,6 +183,7 @@ function renderizarEmpleados(listaFiltro = null) {
     tr.innerHTML = `
       <td class="p-3 font-mono">${e.rut}</td>
       <td class="p-3 font-bold">${e.nombre}</td>
+      <td class="p-3 text-slate-600 text-sm">${e.email || 'Sin correo'}</td>
       <td class="p-3">
         ${e.licencia 
           ? '<span class="bg-amber-100 text-amber-800 px-2 py-0.5 rounded text-[11px] font-bold border border-amber-300">Licencia Médica</span>'
@@ -182,18 +223,20 @@ async function agregarEmpleadoModal() {
   if (!nom) return;
   const rut = prompt('Ingrese RUT (ej: 19.876.543-2):');
   if (!rut) return;
+  const emailPersonal = prompt('Ingrese el Correo Personal del Atendedor:');
+  if (!emailPersonal) return;
 
   try {
     const res = await fetch(`${API_URL}/empleados`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rut: rut, nombre: nom })
+      body: JSON.stringify({ rut: rut, nombre: nom, email: emailPersonal })
     });
 
     const data = await res.json();
 
     if (data.success) {
-      mostrarToast(`Guardado. Correo: ${data.emailCreado}`);
+      mostrarToast(`Atendedor guardado con correo: ${emailPersonal}`);
       await cargarEmpleadosBD();
     } else {
       alert('Error en la base de datos: ' + data.error);
@@ -258,6 +301,173 @@ function eliminarEmpleado(id) {
   mostrarToast('Atendedor eliminado del panel');
 }
 
+// --- GESTIÓN DE ADMINISTRADORES ---
+
+async function cargarAdministradoresBD() {
+  if (!usuarioActual || usuarioActual.rol !== 'admin') return;
+
+  try {
+    const res = await fetch(`${API_URL}/administradores`);
+    administradores = await res.json();
+    renderizarAdministradores();
+  } catch (err) {
+    console.error('Error al cargar administradores:', err);
+  }
+}
+
+function renderizarAdministradores() {
+  const tbody = document.getElementById('tabla-admins-body');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  if (administradores.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="4" class="p-4 text-center text-slate-400 italic">No hay administradores registrados.</td></tr>`;
+    return;
+  }
+
+  administradores.forEach(adm => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="p-3 font-mono">${adm.rut}</td>
+      <td class="p-3 font-bold">${adm.nombre}</td>
+      <td class="p-3 text-slate-600">${adm.email}</td>
+      <td class="p-3 text-center">
+        <button onclick="eliminarAdministrador(${adm.id})" class="text-rose-600 hover:text-rose-800 p-1 rounded transition text-xs font-semibold">
+          <i data-lucide="trash-2" class="w-4 h-4 inline"></i> Eliminar
+        </button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+  lucide.createIcons();
+}
+
+async function agregarAdministradorModal() {
+  if (usuarioActual.rol !== 'admin') return alert('Acceso denegado');
+
+  const nom = prompt('Nombre Completo del Administrador:');
+  if (!nom) return;
+  const rut = prompt('RUT (ej: 12.345.678-9):');
+  if (!rut) return;
+  const email = prompt('Correo electrónico del Administrador:');
+  if (!email) return;
+  const password = prompt('Contraseña temporal de acceso:');
+  if (!password) return;
+
+  try {
+    const res = await fetch(`${API_URL}/administradores`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rut, nombre: nom, email, password })
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      mostrarToast('Administrador registrado con éxito');
+      await cargarAdministradoresBD();
+    } else {
+      alert('Error: ' + data.error);
+    }
+  } catch (err) {
+    console.error('Error:', err);
+    alert('No se pudo conectar con el servidor.');
+  }
+}
+
+async function eliminarAdministrador(id) {
+  if (usuarioActual.rol !== 'admin') return alert('Acceso denegado');
+  if (!confirm('¿Estás seguro de eliminar este administrador?')) return;
+
+  try {
+    const res = await fetch(`${API_URL}/administradores/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) {
+      mostrarToast('Administrador eliminado');
+      await cargarAdministradoresBD();
+    } else {
+      alert('Error al eliminar: ' + data.error);
+    }
+  } catch (err) {
+    console.error('Error:', err);
+    alert('Error de conexión.');
+  }
+}
+
+async function cargarSolicitudesDesbloqueo() {
+  if (usuarioActual?.rol !== 'admin') return;
+
+  try {
+    const res = await fetch(`${API_URL}/solicitudes-desbloqueo?rol=admin`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudieron cargar las solicitudes.');
+    renderizarSolicitudesDesbloqueo(data);
+  } catch (err) {
+    console.error('Error al cargar solicitudes de desbloqueo:', err);
+    const tbody = document.getElementById('tabla-desbloqueos-body');
+    if (tbody) {
+      tbody.innerHTML = '<tr><td colspan="5" class="p-4 text-center text-rose-600">No se pudieron cargar las solicitudes de desbloqueo.</td></tr>';
+    }
+  }
+}
+
+function renderizarSolicitudesDesbloqueo(solicitudesDesbloqueo) {
+  const tbody = document.getElementById('tabla-desbloqueos-body');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  if (solicitudesDesbloqueo.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" class="p-4 text-center text-slate-400 italic">No hay solicitudes de desbloqueo.</td></tr>';
+    return;
+  }
+
+  solicitudesDesbloqueo.forEach(solicitud => {
+    const tr = document.createElement('tr');
+    [solicitud.nombre, solicitud.email, solicitud.fecha_creacion, solicitud.estado].forEach((value, index) => {
+      const td = document.createElement('td');
+      td.className = index === 0 ? 'p-3 font-bold' : 'p-3';
+      td.textContent = value || '';
+      tr.appendChild(td);
+    });
+
+    const tdAcciones = document.createElement('td');
+    tdAcciones.className = 'p-3 text-center';
+    if (solicitud.estado === 'Pendiente') {
+      [['Aprobar', 'Aprobada', 'text-emerald-700 hover:text-emerald-900 mr-2'], ['Rechazar', 'Rechazada', 'text-rose-700 hover:text-rose-900']].forEach(([label, estado, className]) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `${className} font-bold`;
+        button.textContent = label;
+        button.onclick = () => responderSolicitudDesbloqueo(solicitud.id_solicitud, estado);
+        tdAcciones.appendChild(button);
+      });
+    }
+    tr.appendChild(tdAcciones);
+    tbody.appendChild(tr);
+  });
+}
+
+async function responderSolicitudDesbloqueo(id, estado) {
+  if (usuarioActual?.rol !== 'admin') return;
+
+  try {
+    const res = await fetch(`${API_URL}/solicitudes-desbloqueo/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ estado, id_usuario: usuarioActual.id })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.error || 'No se pudo responder la solicitud.');
+      return;
+    }
+    mostrarToast(estado === 'Aprobada' ? 'Cuenta desbloqueada' : 'Solicitud rechazada');
+    await cargarSolicitudesDesbloqueo();
+  } catch (err) {
+    console.error('Error al responder solicitud de desbloqueo:', err);
+    alert('No se pudo conectar con el servidor.');
+  }
+}
+
 // --- GESTIÓN DE TURNOS Y CUADRANTE ---
 
 function actualizarHorarios() {
@@ -277,8 +487,14 @@ function renderizarCuadrante() {
   tbody.innerHTML = '';
 
   const esAdmin = usuarioActual && usuarioActual.rol === 'admin';
+  const empleadosAMostrar = esAdmin
+    ? empleados
+    : empleados.filter(emp =>
+        Number(emp.id_usuario) === Number(usuarioActual?.id) ||
+        (emp.email && emp.email.toLowerCase() === usuarioActual?.email?.toLowerCase())
+      );
 
-  empleados.forEach(emp => {
+  empleadosAMostrar.forEach(emp => {
     const tr = document.createElement('tr');
     tr.className = 'hover:bg-slate-50 transition';
 
@@ -334,48 +550,107 @@ function cambiarTurnoManual(empId, dIdx, nuevoTurno) {
 function generarTurnosAuto() {
   if (usuarioActual.rol !== 'admin') return;
 
-  const turnosPosibles = ['mañana', 'tarde', 'noche', 'libre'];
+  const turnosLaborales = ['mañana', 'tarde', 'noche'];
+  
   empleados.forEach(emp => {
     if (emp.licencia) {
       horarios[emp.id] = Array(7).fill('libre');
     } else {
-      horarios[emp.id] = DIAS.map((_, dIdx) => {
-        if (dIdx >= 5 && Math.random() > 0.5) return 'libre';
-        return turnosPosibles[Math.floor(Math.random() * 3)];
+      let turnosEmpleado = Array(7).fill(null);
+      
+      let diasLibresIndices = [];
+      while (diasLibresIndices.length < 2) {
+        let idx = Math.floor(Math.random() * 7);
+        if (!diasLibresIndices.includes(idx)) {
+          diasLibresIndices.push(idx);
+        }
+      }
+
+      diasLibresIndices.forEach(idx => {
+        turnosEmpleado[idx] = 'libre';
       });
+
+      for (let i = 0; i < 7; i++) {
+        if (turnosEmpleado[i] === 'libre') continue;
+
+        let validos = [...turnosLaborales];
+        if (i > 0 && turnosEmpleado[i - 1] === 'noche') {
+          validos = validos.filter(t => t !== 'mañana');
+        }
+
+        turnosEmpleado[i] = validos[Math.floor(Math.random() * validos.length)];
+      }
+
+      horarios[emp.id] = turnosEmpleado;
     }
   });
+
   renderizarCuadrante();
-  mostrarToast('Turnos semanales distribuidos automáticamente');
+  mostrarToast('Turnos generados con distribución equilibrada de descansos');
 }
 
 // --- GESTIÓN DE ASISTENCIA ---
 
-function guardarAsistencia(e) {
+async function guardarAsistencia(e) {
   e.preventDefault();
-  if (usuarioActual.rol !== 'admin') return;
+  if (usuarioActual?.rol !== 'admin') return;
 
   const empId = Number(document.getElementById('asist-emp').value);
-  const empObj = empleados.find(x => x.id === empId);
   const fecha = document.getElementById('asist-fecha').value;
-  const foja = document.getElementById('asist-foja').value;
-  const ord = Number(document.getElementById('asist-ord').value);
-  const ext = Number(document.getElementById('asist-ext').value);
+  const origen = document.getElementById('asist-origen').value.trim();
+  const ordinarias = Number(document.getElementById('asist-ord').value);
+  const extras = Number(document.getElementById('asist-ext').value);
 
-  const nuevoRegistro = {
-    id: Date.now(),
-    empId: empId,
-    nombre: empObj ? empObj.nombre : 'Atendedor',
-    fecha: fecha,
-    ordinarias: ord,
-    extras: ext,
-    foja: foja
-  };
+  try {
+    const res = await fetch(`${API_URL}/asistencia`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id_atendedor: empId,
+        id_usuario: usuarioActual.id,
+        fecha,
+        horas_normales: ordinarias,
+        horas_extras: extras,
+        origen_registro: origen
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.error || 'No se pudo guardar el registro de asistencia.');
+      return;
+    }
 
-  asistencias.unshift(nuevoRegistro);
-  renderizarAsistencias();
-  mostrarToast('Registro de asistencia guardado');
-  document.getElementById('asist-foja').value = '';
+    e.target.reset();
+    document.getElementById('asist-fecha').valueAsDate = new Date();
+    document.getElementById('asist-origen').value = 'Libro físico';
+    await cargarAsistenciasBD();
+    mostrarToast('Registro de asistencia guardado');
+  } catch (err) {
+    console.error('Error al guardar asistencia:', err);
+    alert('No se pudo conectar con el servidor.');
+  }
+}
+
+async function cargarAsistenciasBD() {
+  if (usuarioActual?.rol !== 'admin') return;
+
+  try {
+    const params = new URLSearchParams({
+      id_usuario: usuarioActual.id,
+      rol: usuarioActual.rol
+    });
+    const res = await fetch(`${API_URL}/asistencia?${params}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudieron cargar los registros.');
+    asistencias = data;
+    renderizarAsistencias();
+  } catch (err) {
+    console.error('Error al cargar asistencia:', err);
+    const tbody = document.getElementById('tabla-asistencia-body');
+    if (tbody) {
+      tbody.innerHTML = '<tr><td colspan="5" class="p-4 text-center text-rose-600">No se pudieron cargar los registros de asistencia.</td></tr>';
+    }
+  }
 }
 
 function renderizarAsistencias() {
@@ -383,16 +658,26 @@ function renderizarAsistencias() {
   if (!tbody) return;
   tbody.innerHTML = '';
 
+  if (asistencias.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" class="p-4 text-center text-slate-400 italic">No hay registros de asistencia.</td></tr>';
+    return;
+  }
+
   asistencias.forEach(a => {
     const tr = document.createElement('tr');
     tr.className = 'hover:bg-slate-50';
-    tr.innerHTML = `
-      <td class="p-3 font-medium text-slate-600">${a.fecha}</td>
-      <td class="p-3 font-bold">${a.nombre}</td>
-      <td class="p-3">${a.ordinarias} hrs</td>
-      <td class="p-3 font-bold text-emerald-600">+${a.extras} hrs</td>
-      <td class="p-3 text-slate-400 font-mono">Foja #${a.foja}</td>
-    `;
+    [
+      [a.fecha, 'p-3 font-medium text-slate-600'],
+      [a.nombre, 'p-3 font-bold'],
+      [`${a.ordinarias} hrs`, 'p-3'],
+      [`+${a.extras} hrs`, 'p-3 font-bold text-emerald-600'],
+      [a.origen, 'p-3 text-slate-500']
+    ].forEach(([value, className]) => {
+      const td = document.createElement('td');
+      td.className = className;
+      td.textContent = value == null ? '' : String(value);
+      tr.appendChild(td);
+    });
     tbody.appendChild(tr);
   });
 }
@@ -409,10 +694,140 @@ function cargarSelectorAsistencia() {
   });
 }
 
-// --- NAVEGACIÓN Y TOASTS ---
+// --- SOLICITUDES ---
+
+async function cargarSolicitudes() {
+  if (!usuarioActual) return;
+
+  try {
+    const params = new URLSearchParams({
+      id_usuario: usuarioActual.id,
+      rol: usuarioActual.rol
+    });
+    const res = await fetch(`${API_URL}/solicitudes?${params}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudieron cargar las solicitudes.');
+    solicitudes = data;
+    renderizarSolicitudes();
+  } catch (err) {
+    console.error('Error al cargar solicitudes:', err);
+    const tbody = document.getElementById('tabla-solicitudes-body');
+    if (tbody) {
+      tbody.innerHTML = '';
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = usuarioActual.rol === 'admin' ? 5 : 4;
+      td.className = 'p-4 text-center text-rose-600';
+      td.textContent = 'No se pudieron cargar las solicitudes. Verifica la conexión con el servidor.';
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    }
+  }
+}
+
+async function crearSolicitud(event) {
+  event.preventDefault();
+  const tipo = document.getElementById('solicitud-tipo').value;
+  const fechaInicio = document.getElementById('solicitud-inicio').value;
+  const fechaFin = document.getElementById('solicitud-fin').value;
+  const motivo = document.getElementById('solicitud-motivo').value.trim();
+
+  try {
+    const res = await fetch(`${API_URL}/solicitudes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id_usuario: usuarioActual.id,
+        tipo,
+        fecha_inicio: fechaInicio,
+        fecha_fin: fechaFin,
+        motivo
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.error || 'No se pudo enviar la solicitud.');
+      return;
+    }
+    event.target.reset();
+    mostrarToast('Solicitud enviada correctamente');
+    await cargarSolicitudes();
+  } catch (err) {
+    console.error('Error al crear solicitud:', err);
+    alert('No se pudo conectar con el servidor.');
+  }
+}
+
+function renderizarSolicitudes() {
+  const tbody = document.getElementById('tabla-solicitudes-body');
+  if (!tbody) return;
+
+  const esAdmin = usuarioActual?.rol === 'admin';
+  const formulario = document.getElementById('form-solicitud');
+  const colPersona = document.getElementById('col-solicitud-persona');
+  const colAcciones = document.getElementById('col-solicitud-acciones');
+  if (formulario) formulario.classList.toggle('hidden', esAdmin);
+  if (colPersona) colPersona.classList.toggle('hidden', !esAdmin);
+  if (colAcciones) colAcciones.classList.toggle('hidden', !esAdmin);
+
+  if (!Array.isArray(solicitudes) || solicitudes.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="${esAdmin ? 5 : 4}" class="p-4 text-center text-slate-400 italic">No hay solicitudes registradas.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = solicitudes.map(solicitud => {
+    const estadoClase = solicitud.estado === 'Aprobada'
+      ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+      : solicitud.estado === 'Rechazada'
+        ? 'bg-rose-100 text-rose-800 border-rose-300'
+        : 'bg-amber-100 text-amber-800 border-amber-300';
+    const fechas = solicitud.fecha_inicio === solicitud.fecha_fin
+      ? solicitud.fecha_inicio
+      : `${solicitud.fecha_inicio} al ${solicitud.fecha_fin}`;
+    const persona = esAdmin
+      ? `<td class="p-3"><span class="font-bold">${solicitud.nombre || ''}</span></td>`
+      : '';
+    const acciones = esAdmin && solicitud.estado === 'Pendiente'
+      ? `<td class="p-3 text-center space-x-2">
+          <button onclick="responderSolicitud(${solicitud.id_solicitud}, 'Aprobada')" class="text-emerald-700 font-bold">Aprobar</button>
+          <button onclick="responderSolicitud(${solicitud.id_solicitud}, 'Rechazada')" class="text-rose-700 font-bold">Rechazar</button>
+        </td>`
+      : esAdmin ? '<td class="p-3"></td>' : '';
+
+    return `<tr>
+      ${persona}
+      <td class="p-3">${solicitud.tipo}</td>
+      <td class="p-3">${fechas}</td>
+      <td class="p-3"><span class="px-2 py-1 rounded border text-[11px] font-bold ${estadoClase}">${solicitud.estado}</span></td>
+      ${acciones}
+    </tr>`;
+  }).join('');
+}
+
+async function responderSolicitud(id, estado) {
+  if (usuarioActual?.rol !== 'admin') return;
+
+  try {
+    const res = await fetch(`${API_URL}/solicitudes/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ estado })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.error || 'No se pudo actualizar la solicitud.');
+      return;
+    }
+    mostrarToast(`Solicitud ${estado.toLowerCase()}`);
+    await cargarSolicitudes();
+  } catch (err) {
+    console.error('Error al responder solicitud:', err);
+    alert('No se pudo conectar con el servidor.');
+  }
+}
 
 function cambiarTab(tab) {
-  ['turnos', 'empleados', 'asistencia'].forEach(t => {
+  ['turnos', 'empleados', 'asistencia', 'solicitudes'].forEach(t => {
     const sec = document.getElementById(`sec-${t}`);
     const btn = document.getElementById(`tab-${t}`);
     if (sec) sec.classList.add('hidden');

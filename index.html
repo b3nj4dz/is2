@@ -40,6 +40,9 @@
         <button type="submit" class="w-full bg-red-700 hover:bg-red-800 text-white font-bold py-3 rounded-lg text-sm transition shadow-md">
           Ingresar al Sistema
         </button>
+        <button type="button" id="btn-solicitar-desbloqueo" onclick="solicitarDesbloqueo()" class="hidden w-full border border-amber-400 bg-amber-50 hover:bg-amber-100 text-amber-900 font-bold py-2.5 rounded-lg text-xs transition">
+          Solicitar desbloqueo a un administrador
+        </button>
       </form>
     </div>
   </div>
@@ -80,6 +83,9 @@
         </button>
         <button onclick="cambiarTab('asistencia')" id="tab-asistencia" class="px-4 py-2.5 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-500 hover:text-slate-700 flex items-center gap-2 transition">
           <i data-lucide="file-spreadsheet" class="w-4 h-4"></i> Libro de Asistencia
+        </button>
+        <button onclick="cambiarTab('solicitudes')" id="tab-solicitudes" class="px-4 py-2.5 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-500 hover:text-slate-700 flex items-center gap-2 transition">
+          <i data-lucide="calendar-clock" class="w-4 h-4"></i> Solicitudes
         </button>
       </div>
 
@@ -150,12 +156,110 @@
               <tr>
                 <th class="p-3">RUT</th>
                 <th class="p-3">Nombre Completo</th>
+                <th class="p-3">Correo</th>
                 <th class="p-3">Estado de Licencia</th>
                 <th class="p-3 text-center">Acciones</th>
               </tr>
             </thead>
             <tbody id="tabla-empleados-body" class="divide-y divide-slate-200 bg-white"></tbody>
           </table>
+        </div>
+
+        <!-- SECCIÓN: GESTIÓN DE ADMINISTRADORES -->
+        <section id="sec-administradores" class="bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm space-y-4">
+          <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            <div>
+              <h2 class="font-bold text-sm text-slate-800">Gestión de Administradores</h2>
+              <p class="text-xs text-slate-500">Controla qué cuentas tienen privilegios de administración en el sistema.</p>
+            </div>
+            <button onclick="agregarAdministradorModal()" class="bg-red-600 hover:bg-red-700 text-white font-bold px-3.5 py-2 rounded-lg text-xs flex items-center gap-1.5 shadow-sm transition">
+              <i data-lucide="user-plus" class="w-4 h-4"></i> Agregar Administrador
+            </button>
+          </div>
+
+          <div class="overflow-x-auto rounded-lg border border-slate-200">
+            <table class="w-full text-left text-xs">
+              <thead class="bg-slate-100 font-bold text-slate-700 border-b border-slate-200">
+                <tr>
+                  <th class="p-3">RUT</th>
+                  <th class="p-3">Nombre Completo</th>
+                  <th class="p-3">Correo Electrónico</th>
+                  <th class="p-3 text-center">Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="tabla-admins-body" class="divide-y divide-slate-200 bg-white"></tbody>
+            </table>
+          </div>
+
+          <div class="space-y-3">
+            <div>
+              <h3 class="font-bold text-sm text-slate-800">Solicitudes de desbloqueo</h3>
+              <p class="text-xs text-slate-500">Revisa las cuentas bloqueadas que solicitaron recuperar el acceso.</p>
+            </div>
+            <div class="overflow-x-auto rounded-lg border border-slate-200">
+              <table class="w-full text-left text-xs">
+                <thead class="bg-slate-100 font-bold text-slate-700 border-b border-slate-200">
+                  <tr>
+                    <th class="p-3">Nombre</th>
+                    <th class="p-3">Correo</th>
+                    <th class="p-3">Fecha de solicitud</th>
+                    <th class="p-3">Estado</th>
+                    <th class="p-3 text-center">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody id="tabla-desbloqueos-body" class="divide-y divide-slate-200 bg-white"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <!-- PESTAÑA 3: SOLICITUDES -->
+      <section id="sec-solicitudes" class="bg-white p-4 rounded-b-xl rounded-tr-xl border border-slate-200 shadow-sm space-y-4 hidden">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <form id="form-solicitud" onsubmit="crearSolicitud(event)" class="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3 text-xs">
+            <h2 class="font-bold text-sm text-slate-800">Nueva solicitud</h2>
+
+            <div>
+              <label class="font-bold block mb-1 text-slate-700">Tipo de solicitud</label>
+              <select id="solicitud-tipo" required class="w-full p-2 border rounded-md bg-white">
+                <option value="Dia libre">Día libre</option>
+                <option value="Licencia">Licencia</option>
+              </select>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="font-bold block mb-1 text-slate-700">Desde</label>
+                <input type="date" id="solicitud-inicio" required class="w-full p-2 border rounded-md bg-white">
+              </div>
+              <div>
+                <label class="font-bold block mb-1 text-slate-700">Hasta</label>
+                <input type="date" id="solicitud-fin" required class="w-full p-2 border rounded-md bg-white">
+              </div>
+            </div>
+            <div>
+              <label class="font-bold block mb-1 text-slate-700">Motivo</label>
+              <textarea id="solicitud-motivo" rows="3" required placeholder="Describe el motivo de la solicitud" class="w-full p-2 border rounded-md bg-white resize-none"></textarea>
+            </div>
+            <button type="submit" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 rounded-lg transition shadow-sm">
+              Enviar solicitud
+            </button>
+          </form>
+
+          <div class="md:col-span-2 border rounded-xl overflow-hidden">
+            <table class="w-full text-left text-xs">
+              <thead class="bg-slate-100 font-bold border-b border-slate-200">
+                <tr>
+                  <th id="col-solicitud-persona" class="p-3">Persona</th>
+                  <th class="p-3">Tipo</th>
+                  <th class="p-3">Fechas</th>
+                  <th class="p-3">Estado</th>
+                  <th id="col-solicitud-acciones" class="p-3 text-center">Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="tabla-solicitudes-body" class="divide-y divide-slate-200 bg-white"></tbody>
+            </table>
+          </div>
         </div>
       </section>
 
@@ -173,10 +277,10 @@
               <select id="asist-emp" required class="w-full p-2 border rounded-md bg-white"></select>
             </div>
             <div>
-              <label class="font-bold block mb-1 text-slate-700">Fecha y N° de Foja</label>
+              <label class="font-bold block mb-1 text-slate-700">Fecha y origen del registro</label>
               <div class="flex gap-2">
                 <input type="date" id="asist-fecha" required class="w-full p-2 border rounded-md bg-white">
-                <input type="text" id="asist-foja" placeholder="Foja N°" required class="w-28 p-2 border rounded-md bg-white">
+                <input type="text" id="asist-origen" value="Libro físico" maxlength="50" required class="w-40 p-2 border rounded-md bg-white">
               </div>
             </div>
             <div class="flex gap-2">
@@ -202,7 +306,7 @@
                   <th class="p-3">Atendedor</th>
                   <th class="p-3">H. Ordinarias</th>
                   <th class="p-3">H. Extras</th>
-                  <th class="p-3">Foja Libro</th>
+                  <th class="p-3">Origen Registro</th>
                 </tr>
               </thead>
               <tbody id="tabla-asistencia-body" class="divide-y divide-slate-200 bg-white"></tbody>
