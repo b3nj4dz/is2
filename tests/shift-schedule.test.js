@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const calcularHorarioTurno = require('./shift-schedule');
+const calcularHorarioTurno = require('../public/js/shift-schedule');
 
 test('mantiene los horarios normales de ocho horas', () => {
   assert.deepEqual(calcularHorarioTurno('07:00', 8), {

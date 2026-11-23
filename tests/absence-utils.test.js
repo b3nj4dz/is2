@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { obtenerSemanaISO, buscarAusenciaEnFecha } = require('./absence-utils');
+const { obtenerSemanaISO, buscarAusenciaEnFecha } = require('../public/js/absence-utils');
 
 test('obtiene la semana de lunes a domingo para cualquier día de referencia', () => {
   assert.deepEqual(obtenerSemanaISO('2026-11-23'), [

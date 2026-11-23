@@ -2,10 +2,10 @@
   "name": "is2",
   "version": "1.0.0",
   "description": "",
-  "main": "app.js",
+  "main": "src/server.js",
   "scripts": {
-    "test": "node --test password-utils.test.js schedule-generator.test.js shift-schedule.test.js absence-utils.test.js",
-    "start": "node server.js"
+    "test": "node --test tests/password-utils.test.js tests/schedule-generator.test.js tests/shift-schedule.test.js tests/absence-utils.test.js",
+    "start": "node src/server.js"
   },
   "keywords": [],
   "author": "",

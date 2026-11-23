@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { performance } = require('node:perf_hooks');
-const generarTurnosEquitativos = require('./schedule-generator');
+const generarTurnosEquitativos = require('../public/js/schedule-generator');
 
 const MINIMOS = { manana: 2, tarde: 1, noche: 2 };
 const TURNOS = [

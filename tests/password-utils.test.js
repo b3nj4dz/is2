@@ -5,7 +5,7 @@ const {
   esHashContrasena,
   hashContrasena,
   verificarContrasena
-} = require('./password-utils');
+} = require('../src/password-utils');
 
 test('exige largo y variedad de caracteres', () => {
   assert.equal(esContrasenaSegura('Abcdef1!'), true);
