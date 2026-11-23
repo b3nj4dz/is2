@@ -15,12 +15,15 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(__dirname));
 
-// Conexión directa a MariaDB en XAMPP
-const db = mysql.createConnection({
+// Pool de conexiones MariaDB de XAMPP
+const db = mysql.createPool({
   host: 'localhost',
   user: 'root',
   password: '',
-  database: 'gestion_turnos_copec'
+  database: 'gestion_turnos_copec',
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0
 });
 
 function consulta(sql, params = []) {
@@ -32,10 +35,74 @@ function consulta(sql, params = []) {
   });
 }
 
+function consultarEnConexion(conexion, sql, params = []) {
+  return new Promise((resolve, reject) => {
+    conexion.query(sql, params, (err, results) => {
+      if (err) return reject(err);
+      resolve(results);
+    });
+  });
+}
+
+async function ejecutarTransaccion(operacion) {
+  const conexion = await new Promise((resolve, reject) => {
+    db.getConnection((err, connection) => err ? reject(err) : resolve(connection));
+  });
+
+  try {
+    await new Promise((resolve, reject) => {
+      conexion.beginTransaction(err => err ? reject(err) : resolve());
+    });
+    const resultado = await operacion((sql, params = []) =>
+      consultarEnConexion(conexion, sql, params)
+    );
+    await new Promise((resolve, reject) => {
+      conexion.commit(err => err ? reject(err) : resolve());
+    });
+    return resultado;
+  } catch (err) {
+    await new Promise(resolve => {
+      conexion.rollback(errorRollback => {
+        if (errorRollback) console.error('Error al revertir una transacción:', errorRollback);
+        resolve();
+      });
+    });
+    throw err;
+  } finally {
+    conexion.release();
+  }
+}
+
 function fechaISOValida(fecha) {
   if (typeof fecha !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return false;
   const parsed = new Date(`${fecha}T00:00:00.000Z`);
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === fecha;
+}
+
+function sumarDiasISO(fecha, cantidad) {
+  const dia = new Date(`${fecha}T00:00:00.000Z`);
+  dia.setUTCDate(dia.getUTCDate() + cantidad);
+  return dia.toISOString().slice(0, 10);
+}
+
+function obtenerInicioSemanaISO(fecha) {
+  const dia = new Date(`${fecha}T00:00:00.000Z`);
+  dia.setUTCDate(dia.getUTCDate() - ((dia.getUTCDay() + 6) % 7));
+  return dia.toISOString().slice(0, 10);
+}
+
+function esLunesISO(fecha) {
+  return fechaISOValida(fecha) && new Date(`${fecha}T00:00:00.000Z`).getUTCDay() === 1;
+}
+
+function restarMesesISO(fecha, meses) {
+  const dia = new Date(`${fecha}T00:00:00.000Z`);
+  const diaDelMes = dia.getUTCDate();
+  dia.setUTCDate(1);
+  dia.setUTCMonth(dia.getUTCMonth() - meses);
+  const ultimoDiaDelMes = new Date(Date.UTC(dia.getUTCFullYear(), dia.getUTCMonth() + 1, 0)).getUTCDate();
+  dia.setUTCDate(Math.min(diaDelMes, ultimoDiaDelMes));
+  return dia.toISOString().slice(0, 10);
 }
 
 async function migrarContrasenasExistentes() {
@@ -51,12 +118,132 @@ async function migrarContrasenasExistentes() {
   }
 }
 
+async function migrarEsquemaNotificaciones() {
+  const columnas = await consulta('SHOW COLUMNS FROM notificacion');
+  const porNombre = new Map(columnas.map(columna => [columna.Field, columna]));
+  const tipo = porNombre.get('tipo');
+
+  if (!tipo) {
+    await consulta(`
+      ALTER TABLE notificacion
+      ADD COLUMN tipo VARCHAR(20) NOT NULL DEFAULT 'cambio' AFTER id_usuario
+    `);
+  } else if (tipo.Type.toLowerCase() !== 'varchar(20)' ||
+      tipo.Null !== 'NO' || tipo.Default !== 'cambio') {
+    await consulta(`
+      ALTER TABLE notificacion
+      MODIFY COLUMN tipo VARCHAR(20) NOT NULL DEFAULT 'cambio'
+    `);
+  }
+
+  const fechaCreacion = porNombre.get('fecha_creacion');
+  if (!fechaCreacion) {
+    if (porNombre.has('fecha_envio')) {
+      await consulta(`
+        ALTER TABLE notificacion
+        CHANGE COLUMN fecha_envio fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      `);
+    } else {
+      await consulta(`
+        ALTER TABLE notificacion
+        ADD COLUMN fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      `);
+    }
+  } else if (!fechaCreacion.Type.toLowerCase().startsWith('timestamp') ||
+      fechaCreacion.Null !== 'NO' ||
+      !/^current_timestamp(?:\(\))?$/i.test(String(fechaCreacion.Default))) {
+    await consulta(`
+      ALTER TABLE notificacion
+      MODIFY COLUMN fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    `);
+  }
+
+  const leida = porNombre.get('leida');
+  if (!leida) {
+    if (porNombre.has('estado_lectura')) {
+      await consulta('UPDATE notificacion SET estado_lectura = 0 WHERE estado_lectura IS NULL');
+      await consulta(`
+        ALTER TABLE notificacion
+        CHANGE COLUMN estado_lectura leida TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    } else {
+      await consulta(`
+        ALTER TABLE notificacion
+        ADD COLUMN leida TINYINT(1) NOT NULL DEFAULT 0
+      `);
+    }
+  } else if (leida.Type.toLowerCase() !== 'tinyint(1)' ||
+      leida.Null !== 'NO' || String(leida.Default) !== '0') {
+    await consulta('UPDATE notificacion SET leida = 0 WHERE leida IS NULL');
+    await consulta(`
+      ALTER TABLE notificacion
+      MODIFY COLUMN leida TINYINT(1) NOT NULL DEFAULT 0
+    `);
+  }
+}
+
 let solicitudSchemaReady = false;
 let autenticacionSchemaReady = false;
 let horariosSchemaReady = false;
+let ausenciasSchemaReady = false;
+let historialTurnosSchemaReady = false;
+let parametrosTemporadaSchemaReady = false;
+let parametrosCoberturaSchemaReady = false;
+let notificacionesSchemaReady = false;
 const tokensCambioContrasena = new Map();
 const sesiones = new Map();
+const conexionesNotificaciones = new Map();
 const DURACION_SESION_MS = 8 * 60 * 60 * 1000;
+
+async function guardarHistorialSemana(horarios, semanaInicio, consultar = consulta) {
+  if (!historialTurnosSchemaReady || !ausenciasSchemaReady) {
+    throw new Error('El historial de turnos aún no está listo.');
+  }
+
+  const ids = horarios.map(horario => Number(horario.id_atendedor));
+  const semanaTermino = sumarDiasISO(semanaInicio, 6);
+  const [atendedores, ausencias] = await Promise.all([
+    consultar(
+      'SELECT id_atendedor, posee_licencia_medica FROM atendedor WHERE id_atendedor IN (?)',
+      [ids]
+    ),
+    consultar(`
+      SELECT id_atendedor,
+             DATE_FORMAT(fecha_inicio, '%Y-%m-%d') AS fecha_inicio,
+             DATE_FORMAT(fecha_termino, '%Y-%m-%d') AS fecha_termino
+      FROM ausencia_atendedor
+      WHERE id_atendedor IN (?) AND fecha_inicio <= ? AND fecha_termino >= ?
+    `, [ids, semanaTermino, semanaInicio])
+  ]);
+  const licenciasIndefinidas = new Set(atendedores
+    .filter(atendedor => Boolean(atendedor.posee_licencia_medica))
+    .map(atendedor => Number(atendedor.id_atendedor)));
+  const ausenciasPorAtendedor = new Map();
+  ausencias.forEach(ausencia => {
+    const idAtendedor = Number(ausencia.id_atendedor);
+    if (!ausenciasPorAtendedor.has(idAtendedor)) ausenciasPorAtendedor.set(idAtendedor, []);
+    ausenciasPorAtendedor.get(idAtendedor).push(ausencia);
+  });
+  const valores = [];
+  horarios.forEach(horario => {
+    const idAtendedor = Number(horario.id_atendedor);
+    const ausenciasAtendedor = ausenciasPorAtendedor.get(idAtendedor) || [];
+    horario.turnos.forEach((turno, dia) => {
+      const fecha = sumarDiasISO(semanaInicio, dia);
+      const ausente = licenciasIndefinidas.has(idAtendedor) || ausenciasAtendedor.some(ausencia =>
+        ausencia.fecha_inicio <= fecha && ausencia.fecha_termino >= fecha
+      );
+      valores.push([idAtendedor, fecha, ausente ? 'libre' : turno]);
+    });
+  });
+
+  await consultar(`
+    INSERT INTO historialturnos (id_atendedor, fecha, turno)
+    VALUES ?
+    ON DUPLICATE KEY UPDATE turno = VALUES(turno)
+  `, [valores]);
+  return valores.length;
+}
 
 function crearSesion(idUsuario) {
   const ahora = Date.now();
@@ -121,7 +308,51 @@ function soloAtendedor(req, res, next) {
   next();
 }
 
-db.connect(err => {
+function emitirActualizacionNotificaciones(idUsuario) {
+  const conexiones = conexionesNotificaciones.get(idUsuario);
+  if (!conexiones) return;
+
+  for (const conexion of [...conexiones]) {
+    if (conexion.destroyed || conexion.writableEnded) {
+      conexiones.delete(conexion);
+      continue;
+    }
+
+    try {
+      conexion.write('event: notificacion\ndata: {"actualizar":true}\n\n');
+    } catch (err) {
+      console.error('Error al enviar una notificación en tiempo real:', err);
+      conexion.end();
+      conexiones.delete(conexion);
+    }
+  }
+
+  if (conexiones.size === 0) conexionesNotificaciones.delete(idUsuario);
+}
+
+async function registrarNotificaciones(consultar, idUsuarios, tipo, mensaje) {
+  const destinatarios = [...new Set(idUsuarios.map(Number).filter(id => Number.isInteger(id) && id > 0))];
+  if (destinatarios.length === 0) return destinatarios;
+  if (!notificacionesSchemaReady) throw new Error('Las notificaciones aún no están listas.');
+  await consultar(
+    'INSERT INTO notificacion (id_usuario, tipo, mensaje) VALUES ?',
+    [destinatarios.map(idUsuario => [idUsuario, tipo, mensaje])]
+  );
+  return destinatarios;
+}
+
+function asegurarTipoDiaLibre(callback) {
+  db.query("SHOW COLUMNS FROM ausencia_atendedor LIKE 'tipo'", (err, columnas) => {
+    if (err) return callback(err);
+    if (columnas.length > 0 && columnas[0].Type.includes("'dia_libre'")) return callback(null);
+    db.query(`
+      ALTER TABLE ausencia_atendedor
+      MODIFY COLUMN tipo ENUM('licencia_medica', 'vacaciones', 'dia_libre') NOT NULL
+    `, callback);
+  });
+}
+
+db.query('SELECT 1', err => {
   if (err) {
     console.error('Error al conectar a MariaDB:', err);
   } else {
@@ -172,16 +403,132 @@ db.connect(err => {
               console.error('Error al preparar la tabla de horarios semanales:', errScheduleTable);
               return;
             }
-            solicitudSchemaReady = true;
-            horariosSchemaReady = true;
-            migrarContrasenasExistentes()
-              .then(() => {
-                autenticacionSchemaReady = true;
-                console.log('Contraseñas existentes protegidas con scrypt');
-              })
-              .catch(errMigration => {
-                console.error('Error al proteger las contraseñas existentes:', errMigration);
+            db.query(`
+              CREATE TABLE IF NOT EXISTS ausencia_atendedor (
+                id_ausencia INT AUTO_INCREMENT PRIMARY KEY,
+                id_atendedor INT NOT NULL,
+                tipo ENUM('licencia_medica', 'vacaciones', 'dia_libre') NOT NULL,
+                fecha_inicio DATE NOT NULL,
+                fecha_termino DATE NOT NULL,
+                observacion VARCHAR(255) NULL,
+                fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                KEY ausencia_atendedor_fechas (id_atendedor, fecha_inicio, fecha_termino),
+                CONSTRAINT ausencia_atendedor_ibfk_1
+                  FOREIGN KEY (id_atendedor) REFERENCES atendedor (id_atendedor) ON DELETE CASCADE
+              ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            `, errAbsenceTable => {
+              if (errAbsenceTable) {
+                console.error('Error al preparar la tabla de novedades y ausencias:', errAbsenceTable);
+                return;
+              }
+              asegurarTipoDiaLibre(errTipoAusencia => {
+                if (errTipoAusencia) {
+                  console.error('Error al ampliar los tipos de ausencia:', errTipoAusencia);
+                  return;
+                }
+                ausenciasSchemaReady = true;
               });
+              db.query(`
+                CREATE TABLE IF NOT EXISTS historialturnos (
+                  id_atendedor INT NOT NULL,
+                  fecha DATE NOT NULL,
+                  turno ENUM('mañana', 'tarde', 'noche', 'libre') NOT NULL,
+                  PRIMARY KEY (id_atendedor, fecha),
+                  KEY historialturnos_fecha_turno (fecha, turno),
+                  CONSTRAINT historialturnos_ibfk_1
+                    FOREIGN KEY (id_atendedor) REFERENCES atendedor (id_atendedor) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+              `, errHistoryTable => {
+                if (errHistoryTable) {
+                  console.error('Error al preparar el historial de turnos:', errHistoryTable);
+                  return;
+                }
+                historialTurnosSchemaReady = true;
+                db.query(`
+                  CREATE TABLE IF NOT EXISTS parametrotemporada (
+                    clave VARCHAR(50) PRIMARY KEY,
+                    valor VARCHAR(100) NOT NULL
+                  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                `, errSeasonTable => {
+                  if (errSeasonTable) {
+                    console.error('Error al preparar la tabla de parámetros por temporada:', errSeasonTable);
+                    return;
+                  }
+                  db.query(`
+                    INSERT IGNORE INTO parametrotemporada (clave, valor) VALUES
+                      ('modo', 'normal'),
+                      ('horas_minimas_normal', '8'),
+                      ('horas_minimas_verano', '9')
+                  `, errDefaults => {
+                    if (errDefaults) {
+                      console.error('Error al inicializar los parámetros por temporada:', errDefaults);
+                      return;
+                    }
+                    solicitudSchemaReady = true;
+                    horariosSchemaReady = true;
+                    parametrosTemporadaSchemaReady = true;
+                    migrarContrasenasExistentes()
+                      .then(() => {
+                        autenticacionSchemaReady = true;
+                        console.log('Contraseñas existentes protegidas con scrypt');
+                      })
+                      .catch(errMigration => {
+                        console.error('Error al proteger las contraseñas existentes:', errMigration);
+                      });
+
+                    db.query(`
+                      CREATE TABLE IF NOT EXISTS parametrocobertura (
+                        turno ENUM('mañana', 'tarde', 'noche') PRIMARY KEY,
+                        minimo INT UNSIGNED NOT NULL
+                      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                    `, errCoverageTable => {
+                      if (errCoverageTable) {
+                        console.error('Error al preparar la tabla de cobertura mínima:', errCoverageTable);
+                        return;
+                      }
+                      db.query(`
+                        INSERT IGNORE INTO parametrocobertura (turno, minimo) VALUES
+                          ('mañana', 2),
+                          ('tarde', 1),
+                          ('noche', 2)
+                      `, errCoverageDefaults => {
+                        if (errCoverageDefaults) {
+                          console.error('Error al inicializar los mínimos de cobertura:', errCoverageDefaults);
+                          return;
+                        }
+                        parametrosCoberturaSchemaReady = true;
+                        db.query(`
+                          CREATE TABLE IF NOT EXISTS notificacion (
+                            id_notificacion INT AUTO_INCREMENT PRIMARY KEY,
+                            id_usuario INT NOT NULL,
+                            tipo VARCHAR(20) NOT NULL,
+                            mensaje VARCHAR(255) NOT NULL,
+                            fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            leida TINYINT(1) NOT NULL DEFAULT 0,
+                            KEY notificacion_usuario_fecha (id_usuario, fecha_creacion),
+                            KEY notificacion_usuario_leida (id_usuario, leida),
+                            CONSTRAINT notificacion_ibfk_1
+                              FOREIGN KEY (id_usuario) REFERENCES usuario (id_usuario) ON DELETE CASCADE
+                          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                        `, errNotificationTable => {
+                          if (errNotificationTable) {
+                            console.error('Error al preparar la tabla de notificaciones:', errNotificationTable);
+                            return;
+                          }
+                          migrarEsquemaNotificaciones()
+                            .then(() => {
+                              notificacionesSchemaReady = true;
+                            })
+                            .catch(errMigration => {
+                              console.error('Error al migrar la tabla de notificaciones:', errMigration);
+                            });
+                        });
+                      });
+                    });
+                  });
+                });
+              });
+            });
           });
         });
         return;
@@ -609,6 +956,246 @@ app.put('/api/asistencia/:id/estado', autenticar, soloAdministrador, (req, res) 
   });
 });
 
+app.get('/api/parametros-temporada', autenticar, (req, res) => {
+  if (!parametrosTemporadaSchemaReady) {
+    return res.status(503).json({ error: 'Los parámetros por temporada aún no están listos.' });
+  }
+
+  db.query(
+    'SELECT clave, valor FROM parametrotemporada WHERE clave IN (?, ?, ?)',
+    ['modo', 'horas_minimas_normal', 'horas_minimas_verano'],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: 'No se pudieron cargar los parámetros por temporada.' });
+
+      const valores = Object.fromEntries(rows.map(row => [row.clave, row.valor]));
+      const normal = Number(valores.horas_minimas_normal);
+      const verano = Number(valores.horas_minimas_verano);
+      res.json({
+        modo: valores.modo === 'verano' ? 'verano' : 'normal',
+        horas_minimas_normal: Number.isInteger(normal) ? Math.max(8, Math.min(12, normal)) : 8,
+        horas_minimas_verano: Number.isInteger(verano) ? Math.max(8, Math.min(12, verano)) : 9
+      });
+    }
+  );
+});
+
+app.put('/api/parametros-temporada', autenticar, soloAdministrador, (req, res) => {
+  if (!parametrosTemporadaSchemaReady) {
+    return res.status(503).json({ error: 'Los parámetros por temporada aún no están listos.' });
+  }
+
+  const { modo, horas_minimas_normal, horas_minimas_verano } = req.body;
+  const normal = Number(horas_minimas_normal);
+  const verano = Number(horas_minimas_verano);
+
+  if (!['normal', 'verano'].includes(modo) ||
+      !Number.isInteger(normal) || normal < 8 || normal > 12 ||
+      !Number.isInteger(verano) || verano < 8 || verano > 12) {
+    return res.status(400).json({
+      error: 'Modo inválido o la duración de cada turno debe ser un número entero entre 8 y 12 horas.'
+    });
+  }
+
+  db.query(
+    'SELECT clave, valor FROM parametrotemporada WHERE clave IN (?, ?, ?)',
+    ['modo', 'horas_minimas_normal', 'horas_minimas_verano'],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: 'No se pudieron leer los parámetros actuales.' });
+
+      const actuales = Object.fromEntries(rows.map(row => [row.clave, row.valor]));
+      const modoActual = actuales.modo === 'verano' ? 'verano' : 'normal';
+      const horasActuales = modoActual === 'verano'
+        ? Number(actuales.horas_minimas_verano) || 9
+        : Number(actuales.horas_minimas_normal) || 8;
+      const horasNuevas = modo === 'verano' ? verano : normal;
+      const cambioHorario = modo !== modoActual || horasNuevas !== horasActuales;
+      if (cambioHorario && !notificacionesSchemaReady) {
+        return res.status(503).json({ error: 'Las notificaciones aún no están listas; inténtalo nuevamente.' });
+      }
+
+      const valores = [
+        ['modo', modo],
+        ['horas_minimas_normal', String(normal)],
+        ['horas_minimas_verano', String(verano)]
+      ];
+      db.query(
+        'INSERT INTO parametrotemporada (clave, valor) VALUES ? ON DUPLICATE KEY UPDATE valor = VALUES(valor)',
+        [valores],
+        errGuardar => {
+          if (errGuardar) return res.status(500).json({ error: 'No se pudieron guardar los parámetros por temporada.' });
+
+          const respuesta = { success: true, modo, horas_minimas_normal: normal, horas_minimas_verano: verano };
+          if (!cambioHorario) return res.json({ ...respuesta, notificaciones: 0 });
+
+          db.query('SELECT id_usuario FROM atendedor WHERE activo = 1 AND id_usuario IS NOT NULL', (errDestinatarios, destinatarios) => {
+            if (errDestinatarios) {
+              return res.status(500).json({
+                error: 'Los parámetros se guardaron, pero no se pudieron consultar los atendedores para notificar.'
+              });
+            }
+            if (destinatarios.length === 0) return res.json({ ...respuesta, notificaciones: 0 });
+
+            const temporada = modo === 'verano' ? 'Modo Verano' : 'Modo Normal';
+            const mensaje = `El ${temporada} ahora considera ${horasNuevas} h por turno. Revisa tu cuadrante.`;
+            const filasNotificacion = destinatarios.map(destinatario => [
+              destinatario.id_usuario,
+              'cambio',
+              mensaje
+            ]);
+            db.query(
+              'INSERT INTO notificacion (id_usuario, tipo, mensaje) VALUES ?',
+              [filasNotificacion],
+              errNotificaciones => {
+                if (errNotificaciones) {
+                  console.error('Error al registrar las notificaciones del cambio de temporada:', errNotificaciones);
+                  return res.status(500).json({
+                    error: 'Los parámetros se guardaron, pero no se pudieron registrar las notificaciones.'
+                  });
+                }
+                destinatarios.forEach(destinatario => emitirActualizacionNotificaciones(destinatario.id_usuario));
+                res.json({ ...respuesta, notificaciones: destinatarios.length });
+              }
+            );
+          });
+        }
+      );
+    }
+  );
+});
+
+app.get('/api/parametros-cobertura', autenticar, soloAdministrador, (req, res) => {
+  if (!parametrosCoberturaSchemaReady) {
+    return res.status(503).json({ error: 'Los parámetros de cobertura aún no están listos.' });
+  }
+
+  db.query(
+    'SELECT turno, minimo FROM parametrocobertura',
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: 'No se pudieron cargar los mínimos de cobertura.' });
+      if (rows.length !== 3) {
+        return res.status(500).json({ error: 'La configuración de cobertura está incompleta.' });
+      }
+
+      const valores = Object.fromEntries(rows.map(row => [row.turno, Number(row.minimo)]));
+      res.json({
+        manana: valores['mañana'],
+        tarde: valores.tarde,
+        noche: valores.noche
+      });
+    }
+  );
+});
+
+app.put('/api/parametros-cobertura', autenticar, soloAdministrador, (req, res) => {
+  if (!parametrosCoberturaSchemaReady) {
+    return res.status(503).json({ error: 'Los parámetros de cobertura aún no están listos.' });
+  }
+
+  const cuerpo = req.body || {};
+  const valores = [
+    ['mañana', Number(cuerpo.manana)],
+    ['tarde', Number(cuerpo.tarde)],
+    ['noche', Number(cuerpo.noche)]
+  ];
+  if (valores.some(([, minimo]) => !Number.isInteger(minimo) || minimo < 1 || minimo > 500)) {
+    return res.status(400).json({ error: 'Cada mínimo debe ser un número entero entre 1 y 500.' });
+  }
+
+  db.query(`
+    INSERT INTO parametrocobertura (turno, minimo) VALUES ?
+    ON DUPLICATE KEY UPDATE minimo = VALUES(minimo)
+  `, [valores], err => {
+    if (err) return res.status(500).json({ error: 'No se pudieron guardar los mínimos de cobertura.' });
+    res.json({
+      success: true,
+      manana: valores[0][1],
+      tarde: valores[1][1],
+      noche: valores[2][1]
+    });
+  });
+});
+
+app.get('/api/notificaciones', autenticar, soloAtendedor, (req, res) => {
+  if (!notificacionesSchemaReady) {
+    return res.status(503).json({ error: 'Las notificaciones aún no están listas.' });
+  }
+
+  db.query(`
+    SELECT id_notificacion AS id, tipo, mensaje,
+           DATE_FORMAT(fecha_creacion, '%Y-%m-%d %H:%i:%s') AS fecha_creacion,
+           leida
+    FROM notificacion
+    WHERE id_usuario = ?
+    ORDER BY fecha_creacion DESC, id_notificacion DESC
+    LIMIT 50
+  `, [req.auth.idUsuario], (err, notificaciones) => {
+    if (err) return res.status(500).json({ error: 'No se pudieron cargar las notificaciones.' });
+    db.query(
+      'SELECT COUNT(*) AS no_leidas FROM notificacion WHERE id_usuario = ? AND leida = 0',
+      [req.auth.idUsuario],
+      (errCount, counts) => {
+        if (errCount) return res.status(500).json({ error: 'No se pudo contar las notificaciones pendientes.' });
+        res.json({ notificaciones, no_leidas: counts[0].no_leidas });
+      }
+    );
+  });
+});
+
+app.put('/api/notificaciones/leidas', autenticar, soloAtendedor, (req, res) => {
+  if (!notificacionesSchemaReady) {
+    return res.status(503).json({ error: 'Las notificaciones aún no están listas.' });
+  }
+
+  db.query(
+    'UPDATE notificacion SET leida = 1 WHERE id_usuario = ? AND leida = 0',
+    [req.auth.idUsuario],
+    err => {
+      if (err) return res.status(500).json({ error: 'No se pudieron marcar las notificaciones como leídas.' });
+      res.json({ success: true });
+    }
+  );
+});
+
+app.get('/api/notificaciones/stream', autenticar, soloAtendedor, (req, res) => {
+  if (!notificacionesSchemaReady) {
+    return res.status(503).json({ error: 'Las notificaciones aún no están listas.' });
+  }
+
+  const idUsuario = req.auth.idUsuario;
+  const token = req.auth.token;
+  res.status(200).set({
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+  res.flushHeaders();
+  res.write('retry: 5000\n\n');
+
+  if (!conexionesNotificaciones.has(idUsuario)) {
+    conexionesNotificaciones.set(idUsuario, new Set());
+  }
+  conexionesNotificaciones.get(idUsuario).add(res);
+
+  const keepAlive = setInterval(() => {
+    const sesion = sesiones.get(token);
+    if (!sesion || sesion.expira <= Date.now()) {
+      res.write('event: sesion-expirada\ndata: {}\n\n');
+      res.end();
+      return;
+    }
+    res.write(': keep-alive\n\n');
+  }, 25000);
+
+  res.on('close', () => {
+    clearInterval(keepAlive);
+    const conexiones = conexionesNotificaciones.get(idUsuario);
+    if (!conexiones) return;
+    conexiones.delete(res);
+    if (conexiones.size === 0) conexionesNotificaciones.delete(idUsuario);
+  });
+});
+
 app.get('/api/horarios', autenticar, (req, res) => {
   if (!horariosSchemaReady) {
     return res.status(503).json({ error: 'La base de datos de horarios aún no está lista.' });
@@ -628,13 +1215,91 @@ app.get('/api/horarios', autenticar, (req, res) => {
   });
 });
 
+app.get('/api/historial-turnos', autenticar, soloAdministrador, async (req, res) => {
+  if (!historialTurnosSchemaReady || !horariosSchemaReady || !ausenciasSchemaReady) {
+    return res.status(503).json({ error: 'El historial de turnos aún no está listo.' });
+  }
+  const { semanaInicio } = req.query;
+  if (!esLunesISO(semanaInicio)) {
+    return res.status(400).json({ error: 'La semana debe comenzar un lunes válido.' });
+  }
+
+  try {
+    const hoy = new Date();
+    const hoyISO = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-${String(hoy.getDate()).padStart(2, '0')}`;
+    const semanaActual = obtenerInicioSemanaISO(hoyISO);
+    const semanaActualTermino = sumarDiasISO(semanaActual, 6);
+    const registrosSemanaActual = await consulta(
+      'SELECT COUNT(*) AS cantidad FROM historialturnos WHERE fecha BETWEEN ? AND ?',
+      [semanaActual, semanaActualTermino]
+    );
+
+    if (Number(registrosSemanaActual[0].cantidad) === 0) {
+      const asignacionesActuales = await consulta(`
+        SELECT h.id_atendedor, h.dia_semana, h.turno
+        FROM asignacionsemanal h
+        INNER JOIN atendedor a ON a.id_atendedor = h.id_atendedor
+        WHERE a.activo = 1
+        ORDER BY h.id_atendedor, h.dia_semana
+      `);
+      const horariosActuales = new Map();
+      asignacionesActuales.forEach(asignacion => {
+        const idAtendedor = Number(asignacion.id_atendedor);
+        if (!horariosActuales.has(idAtendedor)) horariosActuales.set(idAtendedor, Array(7).fill(null));
+        horariosActuales.get(idAtendedor)[asignacion.dia_semana] = asignacion.turno;
+      });
+      const semanaCompleta = [...horariosActuales.values()].every(turnos =>
+        turnos.length === 7 && turnos.every(turno => turno)
+      );
+      if (horariosActuales.size > 0 && semanaCompleta) {
+        await guardarHistorialSemana(
+          [...horariosActuales].map(([id_atendedor, turnos]) => ({ id_atendedor, turnos })),
+          semanaActual
+        );
+      }
+    }
+
+    const historial = await consulta(`
+      SELECT id_atendedor, DATE_FORMAT(fecha, '%Y-%m-%d') AS fecha, turno
+      FROM historialturnos
+      WHERE fecha >= ? AND fecha < ?
+      ORDER BY fecha, id_atendedor
+    `, [restarMesesISO(semanaInicio, 3), semanaInicio]);
+    res.json(historial);
+  } catch (err) {
+    console.error('Error al consultar el historial de turnos:', err);
+    res.status(500).json({ error: 'No se pudo consultar el historial de turnos.' });
+  }
+});
+
 app.put('/api/horarios', autenticar, soloAdministrador, (req, res) => {
   if (!horariosSchemaReady) {
     return res.status(503).json({ error: 'La base de datos de horarios aún no está lista.' });
   }
 
-  const { horarios } = req.body;
+  const cuerpo = req.body || {};
+  const { horarios } = cuerpo;
+  const { semanaInicio } = cuerpo;
+  const tipoNotificacion = cuerpo.notificacion === undefined ? null : cuerpo.notificacion;
   const turnosValidos = new Set(['mañana', 'tarde', 'noche', 'libre']);
+  const hoy = new Date();
+  const hoyISO = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-${String(hoy.getDate()).padStart(2, '0')}`;
+  const semanaActual = obtenerInicioSemanaISO(hoyISO);
+  if (!esLunesISO(semanaInicio)) {
+    return res.status(400).json({ error: 'La semana debe comenzar un lunes válido.' });
+  }
+  if (semanaInicio < semanaActual) {
+    return res.status(409).json({ error: 'No se pueden modificar horarios de semanas pasadas.' });
+  }
+  if (!historialTurnosSchemaReady || !ausenciasSchemaReady) {
+    return res.status(503).json({ error: 'El historial de turnos aún no está listo.' });
+  }
+  if (tipoNotificacion !== null && !['cambio', 'publicacion'].includes(tipoNotificacion)) {
+    return res.status(400).json({ error: 'El tipo de notificación no es válido.' });
+  }
+  if (tipoNotificacion && !notificacionesSchemaReady) {
+    return res.status(503).json({ error: 'Las notificaciones aún no están listas.' });
+  }
   if (!Array.isArray(horarios) || horarios.length > 500) {
     return res.status(400).json({ error: 'La lista de horarios no es válida.' });
   }
@@ -657,7 +1322,7 @@ app.put('/api/horarios', autenticar, soloAdministrador, (req, res) => {
   if (horarios.length === 0) return res.json({ success: true });
 
   const ids = [...idsAtendedores];
-  db.query('SELECT id_atendedor FROM atendedor WHERE activo = 1 AND id_atendedor IN (?)', [ids], (errEmployees, rows) => {
+  db.query('SELECT id_atendedor, id_usuario FROM atendedor WHERE activo = 1 AND id_atendedor IN (?)', [ids], (errEmployees, rows) => {
     if (errEmployees) return res.status(500).json({ error: 'No se pudieron validar los atendedores.' });
     if (rows.length !== ids.length) {
       return res.status(400).json({ error: 'Uno o más atendedores ya no existen.' });
@@ -670,13 +1335,69 @@ app.put('/api/horarios', autenticar, soloAdministrador, (req, res) => {
       });
     });
 
-    db.query(`
-      INSERT INTO asignacionsemanal (id_atendedor, dia_semana, turno)
-      VALUES ?
-      ON DUPLICATE KEY UPDATE turno = VALUES(turno)
-    `, [valores], (errSave, result) => {
-      if (errSave) return res.status(500).json({ error: 'No se pudieron guardar los horarios.' });
-      res.json({ success: true, asignaciones: result.affectedRows });
+    ejecutarTransaccion(async consultar => {
+      let destinatarios = [];
+      if (tipoNotificacion === 'publicacion') {
+        destinatarios = rows.map(row => ({ id_usuario: row.id_usuario }));
+      } else if (tipoNotificacion === 'cambio') {
+        const asignacionesPrevias = await consultar(
+          'SELECT id_atendedor, dia_semana, turno FROM asignacionsemanal WHERE id_atendedor IN (?) FOR UPDATE',
+          [ids]
+        );
+        const horariosAnteriores = new Map();
+        asignacionesPrevias.forEach(asignacion => {
+          const idAtendedor = Number(asignacion.id_atendedor);
+          if (!horariosAnteriores.has(idAtendedor)) {
+            horariosAnteriores.set(idAtendedor, Array(7).fill(null));
+          }
+          horariosAnteriores.get(idAtendedor)[asignacion.dia_semana] = asignacion.turno;
+        });
+        const idUsuariosPorAtendedor = new Map(rows.map(row => [
+          Number(row.id_atendedor),
+          row.id_usuario
+        ]));
+        destinatarios = horarios.filter(horario => {
+          const anterior = horariosAnteriores.get(Number(horario.id_atendedor));
+          return !anterior || horario.turnos.some((turno, dia) => anterior[dia] !== turno);
+        }).map(horario => ({
+          id_usuario: idUsuariosPorAtendedor.get(Number(horario.id_atendedor))
+        }));
+      }
+
+      const resultado = await consultar(`
+        INSERT INTO asignacionsemanal (id_atendedor, dia_semana, turno)
+        VALUES ?
+        ON DUPLICATE KEY UPDATE turno = VALUES(turno)
+      `, [valores]);
+      await guardarHistorialSemana(horarios, semanaInicio, consultar);
+
+      if (destinatarios.length > 0) {
+        const mensaje = tipoNotificacion === 'publicacion'
+          ? 'Se publicó un nuevo horario semanal. Revisa tu cuadrante.'
+          : 'Tu horario fue modificado. Revisa tus turnos asignados.';
+        const usuariosNotificados = await registrarNotificaciones(
+          consultar,
+          destinatarios.map(destinatario => destinatario.id_usuario),
+          tipoNotificacion,
+          mensaje
+        );
+        destinatarios = usuariosNotificados.map(id_usuario => ({ id_usuario }));
+      }
+
+      return {
+        asignaciones: resultado.affectedRows,
+        destinatarios: destinatarios.map(destinatario => destinatario.id_usuario)
+      };
+    }).then(resultado => {
+      resultado.destinatarios.forEach(emitirActualizacionNotificaciones);
+      res.json({
+        success: true,
+        asignaciones: resultado.asignaciones,
+        notificaciones: resultado.destinatarios.length
+      });
+    }).catch(err => {
+      console.error('Error al guardar la propuesta, historial o notificaciones:', err);
+      res.status(500).json({ error: 'No se pudo guardar el horario, su historial y sus notificaciones.' });
     });
   });
 });
@@ -713,17 +1434,23 @@ app.post('/api/empleados', autenticar, soloAdministrador, (req, res) => {
   }
 
   hashContrasena(password).then(passwordHash => {
-    const sqlUser = `INSERT INTO usuario (rut, hash_contrasena, email, nombre, debe_cambiar_contrasena) VALUES (?, ?, ?, ?, 0)`;
-
-    db.query(sqlUser, [rut, passwordHash, email, nombre], (err, resultUser) => {
-      if (err) {
-        if (err.code === 'ER_DUP_ENTRY') {
-          return res.status(400).json({ error: 'El correo electrónico o RUT ya se encuentran registrados.' });
-        }
-        return res.status(500).json({ error: 'Error al insertar usuario: ' + err.message });
+    ejecutarTransaccion(async consultar => {
+      const resultadoUsuario = await consultar(
+        'INSERT INTO usuario (rut, hash_contrasena, email, nombre, debe_cambiar_contrasena) VALUES (?, ?, ?, ?, 0)',
+        [rut, passwordHash, email, nombre]
+      );
+      await consultar(
+        'INSERT INTO atendedor (fecha_contratacion, posee_licencia_medica, id_usuario) VALUES (?, FALSE, ?)',
+        [new Date().toISOString().slice(0, 10), resultadoUsuario.insertId]
+      );
+    }).then(() => {
+      res.json({ success: true });
+    }).catch(err => {
+      if (err.code === 'ER_DUP_ENTRY') {
+        return res.status(400).json({ error: 'El correo electrónico o RUT ya se encuentran registrados.' });
       }
-
-      insertarAtendedor(resultUser.insertId, res);
+      console.error('Error al crear el usuario y el atendedor:', err);
+      res.status(500).json({ error: 'No se pudo crear el usuario y el atendedor.' });
     });
   }).catch(err => {
     console.error('Error al proteger la contraseña del atendedor:', err);
@@ -759,44 +1486,262 @@ app.put('/api/empleados/:id', autenticar, soloAdministrador, (req, res) => {
   });
 });
 
-function insertarAtendedor(idUsuario, res) {
-  const fechaHoy = new Date().toISOString().slice(0, 10);
-  const sqlAtendedor = `INSERT INTO atendedor (fecha_contratacion, posee_licencia_medica, id_usuario) VALUES (?, FALSE, ?)`;
+function validarDatosAusencia(cuerpo) {
+  const idAtendedor = Number(cuerpo.id_atendedor);
+  const tipo = cuerpo.tipo;
+  const fechaInicio = cuerpo.fecha_inicio;
+  const fechaTermino = cuerpo.fecha_termino;
+  const observacion = typeof cuerpo.observacion === 'string' ? cuerpo.observacion.trim() : '';
 
-  db.query(sqlAtendedor, [fechaHoy, idUsuario], (err, resultAtendedor) => {
-    if (err) {
-      return db.query('DELETE FROM usuario WHERE id_usuario = ?', [idUsuario], errCleanup => {
-        if (errCleanup) {
-          console.error('No se pudo limpiar la cuenta incompleta:', errCleanup);
-          return res.status(500).json({ error: 'No se pudo crear ni limpiar la cuenta del atendedor.' });
-        }
-        res.status(500).json({ error: 'Error al insertar atendedor: ' + err.message });
-      });
+  if (!Number.isInteger(idAtendedor) || idAtendedor <= 0 ||
+      !['licencia_medica', 'vacaciones', 'dia_libre'].includes(tipo) ||
+      !fechaISOValida(fechaInicio) || !fechaISOValida(fechaTermino) ||
+      fechaTermino < fechaInicio ||
+      (cuerpo.observacion !== undefined && cuerpo.observacion !== null && typeof cuerpo.observacion !== 'string') ||
+      observacion.length > 255) {
+    return { error: 'Atendedor, tipo, fechas o descripción de la novedad no válidos.' };
+  }
+  return {
+    datos: {
+      idAtendedor,
+      tipo,
+      fechaInicio,
+      fechaTermino,
+      observacion: observacion || null
     }
-    res.json({ success: true });
-  });
+  };
 }
+
+app.get('/api/ausencias', autenticar, (req, res) => {
+  if (!ausenciasSchemaReady) {
+    return res.status(503).json({ error: 'El registro de novedades aún no está listo.' });
+  }
+
+  const filtroAtendedor = req.auth.idAtendedor ? 'WHERE ausencia.id_atendedor = ?' : '';
+  const parametros = req.auth.idAtendedor ? [req.auth.idAtendedor] : [];
+  db.query(`
+    SELECT ausencia.id_ausencia AS id,
+           ausencia.id_atendedor,
+           usuario.nombre AS nombre_atendedor,
+           ausencia.tipo,
+           DATE_FORMAT(ausencia.fecha_inicio, '%Y-%m-%d') AS fecha_inicio,
+           DATE_FORMAT(ausencia.fecha_termino, '%Y-%m-%d') AS fecha_termino,
+           ausencia.observacion
+    FROM ausencia_atendedor ausencia
+    INNER JOIN atendedor ON atendedor.id_atendedor = ausencia.id_atendedor
+    INNER JOIN usuario ON usuario.id_usuario = atendedor.id_usuario
+    ${filtroAtendedor}
+    ORDER BY ausencia.fecha_inicio DESC, ausencia.id_ausencia DESC
+  `, parametros, (err, rows) => {
+    if (err) return res.status(500).json({ error: 'No se pudieron cargar las novedades.' });
+    res.json(rows);
+  });
+});
+
+app.post('/api/ausencias', autenticar, soloAdministrador, (req, res) => {
+  if (!ausenciasSchemaReady || !notificacionesSchemaReady) {
+    return res.status(503).json({ error: 'El registro de novedades y notificaciones aún no está listo.' });
+  }
+
+  const { datos, error } = validarDatosAusencia(req.body || {});
+  if (error) return res.status(400).json({ error });
+
+  ejecutarTransaccion(async consultar => {
+    const atendedores = await consultar(
+      'SELECT id_usuario FROM atendedor WHERE id_atendedor = ? AND activo = 1 FOR UPDATE',
+      [datos.idAtendedor]
+    );
+    if (atendedores.length === 0) {
+      return { errorStatus: 404, error: 'Atendedor activo no encontrado.' };
+    }
+    const solapadas = await consultar(`
+      SELECT id_ausencia FROM ausencia_atendedor
+      WHERE id_atendedor = ? AND fecha_inicio <= ? AND fecha_termino >= ?
+      FOR UPDATE
+    `, [datos.idAtendedor, datos.fechaTermino, datos.fechaInicio]);
+    if (solapadas.length > 0) {
+      return { errorStatus: 409, error: 'El atendedor ya tiene una novedad registrada en ese periodo.' };
+    }
+
+    await consultar(`
+      INSERT INTO ausencia_atendedor (id_atendedor, tipo, fecha_inicio, fecha_termino, observacion)
+      VALUES (?, ?, ?, ?, ?)
+    `, [datos.idAtendedor, datos.tipo, datos.fechaInicio, datos.fechaTermino, datos.observacion]);
+    const destinatarios = await registrarNotificaciones(
+      consultar,
+      [atendedores[0].id_usuario],
+      'cambio',
+      `Tu cuadrante cambió: ${datos.tipo} del ${datos.fechaInicio} al ${datos.fechaTermino}.`
+    );
+    return { destinatarios };
+  }).then(resultado => {
+    if (resultado.errorStatus) return res.status(resultado.errorStatus).json({ error: resultado.error });
+    resultado.destinatarios.forEach(emitirActualizacionNotificaciones);
+    res.status(201).json({ success: true });
+  }).catch(err => {
+    console.error('Error al registrar una ausencia y notificar al atendedor:', err);
+    res.status(500).json({ error: 'No se pudo registrar la novedad ni actualizar su notificación.' });
+  });
+});
+
+app.put('/api/ausencias/:id', autenticar, soloAdministrador, (req, res) => {
+  if (!ausenciasSchemaReady || !notificacionesSchemaReady) {
+    return res.status(503).json({ error: 'El registro de novedades y notificaciones aún no está listo.' });
+  }
+
+  const idAusencia = Number(req.params.id);
+  const { datos, error } = validarDatosAusencia(req.body || {});
+  if (!Number.isInteger(idAusencia) || idAusencia <= 0) {
+    return res.status(400).json({ error: 'El identificador de la novedad no es válido.' });
+  }
+  if (error) return res.status(400).json({ error });
+
+  ejecutarTransaccion(async consultar => {
+    const inicial = await consultar(
+      'SELECT id_atendedor FROM ausencia_atendedor WHERE id_ausencia = ?',
+      [idAusencia]
+    );
+    if (inicial.length === 0) return { errorStatus: 404, error: 'Novedad no encontrada.' };
+    const idAtendedorAnterior = Number(inicial[0].id_atendedor);
+    const idsAtendedores = [...new Set([idAtendedorAnterior, datos.idAtendedor])].sort((a, b) => a - b);
+    const atendedores = await consultar(
+      'SELECT id_atendedor, id_usuario, activo FROM atendedor WHERE id_atendedor IN (?) ORDER BY id_atendedor FOR UPDATE',
+      [idsAtendedores]
+    );
+    const atendedorNuevo = atendedores.find(item => Number(item.id_atendedor) === datos.idAtendedor);
+    if (!atendedorNuevo || Number(atendedorNuevo.activo) !== 1) {
+      return { errorStatus: 404, error: 'Atendedor activo no encontrado.' };
+    }
+    const actual = await consultar(
+      'SELECT id_atendedor FROM ausencia_atendedor WHERE id_ausencia = ? FOR UPDATE',
+      [idAusencia]
+    );
+    if (actual.length === 0) return { errorStatus: 404, error: 'Novedad no encontrada.' };
+    if (Number(actual[0].id_atendedor) !== idAtendedorAnterior) {
+      return { errorStatus: 409, error: 'La novedad cambió mientras se editaba. Recarga e inténtalo nuevamente.' };
+    }
+
+    const solapadas = await consultar(`
+      SELECT id_ausencia FROM ausencia_atendedor
+      WHERE id_atendedor = ? AND fecha_inicio <= ? AND fecha_termino >= ?
+        AND id_ausencia <> ?
+      FOR UPDATE
+    `, [datos.idAtendedor, datos.fechaTermino, datos.fechaInicio, idAusencia]);
+    if (solapadas.length > 0) {
+      return { errorStatus: 409, error: 'El atendedor ya tiene otra novedad registrada en ese periodo.' };
+    }
+
+    await consultar(`
+      UPDATE ausencia_atendedor
+      SET id_atendedor = ?, tipo = ?, fecha_inicio = ?, fecha_termino = ?, observacion = ?
+      WHERE id_ausencia = ?
+    `, [datos.idAtendedor, datos.tipo, datos.fechaInicio, datos.fechaTermino, datos.observacion, idAusencia]);
+    const destinatarios = await registrarNotificaciones(
+      consultar,
+      atendedores.filter(item => Number(item.activo) === 1).map(item => item.id_usuario),
+      'cambio',
+      `Tu cuadrante cambió por una modificación de ${datos.tipo} (${datos.fechaInicio} al ${datos.fechaTermino}).`
+    );
+    return { destinatarios };
+  }).then(resultado => {
+    if (resultado.errorStatus) return res.status(resultado.errorStatus).json({ error: resultado.error });
+    resultado.destinatarios.forEach(emitirActualizacionNotificaciones);
+    res.json({ success: true });
+  }).catch(err => {
+    console.error('Error al editar una ausencia y notificar a los atendedores:', err);
+    res.status(500).json({ error: 'No se pudo actualizar la novedad ni sus notificaciones.' });
+  });
+});
+
+app.delete('/api/ausencias/:id', autenticar, soloAdministrador, (req, res) => {
+  if (!ausenciasSchemaReady || !notificacionesSchemaReady) {
+    return res.status(503).json({ error: 'El registro de novedades y notificaciones aún no está listo.' });
+  }
+  const idAusencia = Number(req.params.id);
+  if (!Number.isInteger(idAusencia) || idAusencia <= 0) {
+    return res.status(400).json({ error: 'El identificador de la novedad no es válido.' });
+  }
+
+  ejecutarTransaccion(async consultar => {
+    const inicial = await consultar(
+      'SELECT id_atendedor FROM ausencia_atendedor WHERE id_ausencia = ?',
+      [idAusencia]
+    );
+    if (inicial.length === 0) return { errorStatus: 404, error: 'Novedad no encontrada.' };
+    const idAtendedor = Number(inicial[0].id_atendedor);
+    const atendedores = await consultar(
+      'SELECT id_usuario, activo FROM atendedor WHERE id_atendedor = ? FOR UPDATE',
+      [idAtendedor]
+    );
+    const actual = await consultar(
+      'SELECT id_atendedor FROM ausencia_atendedor WHERE id_ausencia = ? FOR UPDATE',
+      [idAusencia]
+    );
+    if (actual.length === 0) return { errorStatus: 404, error: 'Novedad no encontrada.' };
+    if (Number(actual[0].id_atendedor) !== idAtendedor) {
+      return { errorStatus: 409, error: 'La novedad cambió mientras se eliminaba. Recarga e inténtalo nuevamente.' };
+    }
+    await consultar('DELETE FROM ausencia_atendedor WHERE id_ausencia = ?', [idAusencia]);
+    const destinatarios = await registrarNotificaciones(
+      consultar,
+      atendedores.length > 0 && Number(atendedores[0].activo) === 1 ? [atendedores[0].id_usuario] : [],
+      'cambio',
+      'Se eliminó una novedad que afectaba tu cuadrante; revisa tus turnos.'
+    );
+    return { destinatarios };
+  }).then(resultado => {
+    if (resultado.errorStatus) return res.status(resultado.errorStatus).json({ error: resultado.error });
+    resultado.destinatarios.forEach(emitirActualizacionNotificaciones);
+    res.json({ success: true });
+  }).catch(err => {
+    console.error('Error al eliminar una ausencia y notificar al atendedor:', err);
+    res.status(500).json({ error: 'No se pudo eliminar la novedad ni actualizar su notificación.' });
+  });
+});
 
 // 3. ACTUALIZAR LICENCIA (PUT)
 app.put('/api/empleados/:id/licencia', autenticar, soloAdministrador, (req, res) => {
-  const { id } = req.params;
+  const id = Number(req.params.id);
   const { licencia } = req.body;
-  if (typeof licencia !== 'boolean') {
+  if (!Number.isInteger(id) || id <= 0 || typeof licencia !== 'boolean') {
     return res.status(400).json({ error: 'El estado de licencia no es válido.' });
   }
+  if (!notificacionesSchemaReady) {
+    return res.status(503).json({ error: 'Las notificaciones aún no están listas.' });
+  }
 
-  const sql = `UPDATE atendedor SET posee_licencia_medica = ? WHERE id_atendedor = ?`;
-
-  db.query(sql, [licencia ? 1 : 0, id], (err, result) => {
-    if (err) return res.status(500).json({ error: 'Error al actualizar licencia: ' + err.message });
-    if (result.affectedRows === 0) {
-      return db.query('SELECT id_atendedor FROM atendedor WHERE id_atendedor = ?', [id], (errFind, rows) => {
-        if (errFind) return res.status(500).json({ error: 'No se pudo validar el atendedor.' });
-        if (rows.length === 0) return res.status(404).json({ error: 'Atendedor no encontrado.' });
-        res.json({ success: true });
-      });
+  ejecutarTransaccion(async consultar => {
+    const atendedores = await consultar(
+      'SELECT id_usuario, activo, posee_licencia_medica FROM atendedor WHERE id_atendedor = ? FOR UPDATE',
+      [id]
+    );
+    if (atendedores.length === 0) {
+      return { errorStatus: 404, error: 'Atendedor no encontrado.' };
     }
+    if (Boolean(atendedores[0].posee_licencia_medica) === licencia) {
+      return { destinatarios: [] };
+    }
+
+    await consultar(
+      'UPDATE atendedor SET posee_licencia_medica = ? WHERE id_atendedor = ?',
+      [licencia ? 1 : 0, id]
+    );
+    const destinatarios = await registrarNotificaciones(
+      consultar,
+      Number(atendedores[0].activo) === 1 ? [atendedores[0].id_usuario] : [],
+      'cambio',
+      licencia
+        ? 'Se registró una licencia sin fechas que modifica tu disponibilidad en el cuadrante.'
+        : 'Se retiró una licencia sin fechas; revisa tu cuadrante.'
+    );
+    return { destinatarios };
+  }).then(resultado => {
+    if (resultado.errorStatus) return res.status(resultado.errorStatus).json({ error: resultado.error });
+    resultado.destinatarios.forEach(emitirActualizacionNotificaciones);
     res.json({ success: true });
+  }).catch(err => {
+    console.error('Error al actualizar una licencia y notificar al atendedor:', err);
+    res.status(500).json({ error: 'No se pudo actualizar la licencia ni su notificación.' });
   });
 });
 
@@ -829,6 +1774,7 @@ app.put('/api/empleados/:id/estado', autenticar, soloAdministrador, (req, res) =
 // 4. OBTENER ADMINISTRADORES (GET)
 app.get('/api/administradores', autenticar, soloAdministrador, (req, res) => {
   const sql = `SELECT adm.id_administrador AS id, adm.departamento, adm.activo,
+                      adm.id_administrador = (SELECT MIN(id_administrador) FROM administrador) AS es_general,
                       u.rut, u.nombre, u.email
                FROM administrador adm
                INNER JOIN usuario u ON adm.id_usuario = u.id_usuario
@@ -858,29 +1804,23 @@ app.post('/api/administradores', autenticar, soloAdministrador, (req, res) => {
   }
 
   hashContrasena(password).then(passwordHash => {
-    const sqlUser = `INSERT INTO usuario (rut, hash_contrasena, email, nombre, debe_cambiar_contrasena) VALUES (?, ?, ?, ?, 0)`;
-
-    db.query(sqlUser, [rut, passwordHash, email, nombre], (err, resultUser) => {
-      if (err) {
-        if (err.code === 'ER_DUP_ENTRY') {
-          return res.status(400).json({ error: 'El correo electrónico o RUT ya se encuentran registrados.' });
-        }
-        return res.status(500).json({ error: 'Error al insertar usuario: ' + err.message });
+    ejecutarTransaccion(async consultar => {
+      const resultadoUsuario = await consultar(
+        'INSERT INTO usuario (rut, hash_contrasena, email, nombre, debe_cambiar_contrasena) VALUES (?, ?, ?, ?, 0)',
+        [rut, passwordHash, email, nombre]
+      );
+      await consultar(
+        'INSERT INTO administrador (departamento, id_usuario) VALUES (?, ?)',
+        [departamento, resultadoUsuario.insertId]
+      );
+    }).then(() => {
+      res.json({ success: true, message: 'Administrador creado correctamente' });
+    }).catch(err => {
+      if (err.code === 'ER_DUP_ENTRY') {
+        return res.status(400).json({ error: 'El correo electrónico o RUT ya se encuentran registrados.' });
       }
-
-      const sqlAdmin = `INSERT INTO administrador (departamento, id_usuario) VALUES (?, ?)`;
-      db.query(sqlAdmin, [departamento, resultUser.insertId], (errAdmin) => {
-        if (errAdmin) {
-          return db.query('DELETE FROM usuario WHERE id_usuario = ?', [resultUser.insertId], errCleanup => {
-            if (errCleanup) {
-              console.error('No se pudo limpiar la cuenta incompleta:', errCleanup);
-              return res.status(500).json({ error: 'No se pudo crear ni limpiar la cuenta de administrador.' });
-            }
-            res.status(500).json({ error: 'Error al insertar administrador: ' + errAdmin.message });
-          });
-        }
-        res.json({ success: true, message: 'Administrador creado correctamente' });
-      });
+      console.error('Error al crear el usuario y el administrador:', err);
+      res.status(500).json({ error: 'No se pudo crear el usuario y el administrador.' });
     });
   }).catch(err => {
     console.error('Error al proteger la contraseña del administrador:', err);
@@ -928,10 +1868,18 @@ app.put('/api/administradores/:id/estado', autenticar, soloAdministrador, (req, 
     return res.status(409).json({ error: 'No puedes archivar tu propia cuenta de administrador.' });
   }
 
-  db.query('SELECT activo FROM administrador WHERE id_administrador = ?', [req.params.id], (errFind, rows) => {
+  db.query(`
+    SELECT activo,
+           id_administrador = (SELECT MIN(id_administrador) FROM administrador) AS es_general
+    FROM administrador
+    WHERE id_administrador = ?
+  `, [req.params.id], (errFind, rows) => {
     if (errFind) return res.status(500).json({ error: 'No se pudo validar el administrador.' });
     if (rows.length === 0) return res.status(404).json({ error: 'Administrador no encontrado.' });
     if (Boolean(rows[0].activo) === activo) return res.json({ success: true });
+    if (!activo && Boolean(rows[0].es_general)) {
+      return res.status(409).json({ error: 'La cuenta del administrador general no se puede archivar.' });
+    }
 
     const actualizar = () => {
       db.query('UPDATE administrador SET activo = ? WHERE id_administrador = ?', [activo ? 1 : 0, req.params.id], errUpdate => {
@@ -987,7 +1935,7 @@ app.post('/api/solicitudes', autenticar, soloAtendedor, (req, res) => {
   if (!solicitudSchemaReady) {
     return res.status(503).json({ error: 'La base de datos de solicitudes aún no está lista.' });
   }
-  if (!['Dia libre', 'Licencia'].includes(tipo) ||
+  if (!['Dia libre', 'Vacaciones', 'Licencia'].includes(tipo) ||
       !fechaISOValida(fecha_inicio) || !fechaISOValida(fecha_fin) || !motivoLimpio) {
     return res.status(400).json({ error: 'Completa todos los datos obligatorios.' });
   }
@@ -1044,26 +1992,101 @@ app.put('/api/solicitudes/:id', autenticar, (req, res) => {
     if (!['Aprobada', 'Rechazada'].includes(estado)) {
       return res.status(400).json({ error: 'Estado de solicitud inválido.' });
     }
+    if (!ausenciasSchemaReady || !notificacionesSchemaReady) {
+      return res.status(503).json({ error: 'Las ausencias y notificaciones aún no están listas.' });
+    }
 
-    db.query(
-      `UPDATE solicituddialibre
-       SET estado_solicitud = ?, id_administrador = ?
-       WHERE id_solicitud = ? AND estado_solicitud = 'Pendiente'`,
-      [estado, req.auth.idAdministrador, req.params.id],
-      (err, result) => {
-        if (err) return res.status(500).json({ error: 'No se pudo responder la solicitud.' });
-        if (result.affectedRows === 0) {
-          return res.status(404).json({ error: 'Solicitud pendiente no encontrada.' });
-        }
-        res.json({ success: true });
+    const idSolicitud = Number(req.params.id);
+    if (!Number.isInteger(idSolicitud) || idSolicitud <= 0) {
+      return res.status(400).json({ error: 'El identificador de la solicitud no es válido.' });
+    }
+
+    ejecutarTransaccion(async consultar => {
+      const solicitudesPendientes = await consultar(`
+        SELECT s.id_solicitud, s.id_atendedor, s.tipo_solicitud,
+               DATE_FORMAT(s.fecha_inicio, '%Y-%m-%d') AS fecha_inicio,
+               DATE_FORMAT(s.fecha_termino, '%Y-%m-%d') AS fecha_termino,
+               a.activo, a.id_usuario
+        FROM solicituddialibre s
+        INNER JOIN atendedor a ON a.id_atendedor = s.id_atendedor
+        WHERE s.id_solicitud = ? AND s.estado_solicitud = 'Pendiente'
+        FOR UPDATE
+      `, [idSolicitud]);
+      if (solicitudesPendientes.length === 0) {
+        return { errorStatus: 404, error: 'Solicitud pendiente no encontrada.' };
       }
-    );
+
+      const solicitud = solicitudesPendientes[0];
+      if (Number(solicitud.activo) !== 1) {
+        return { errorStatus: 409, error: 'No se puede aprobar una solicitud de un atendedor inactivo.' };
+      }
+
+      if (estado === 'Aprobada') {
+        await consultar(
+          'SELECT id_atendedor FROM atendedor WHERE id_atendedor = ? FOR UPDATE',
+          [solicitud.id_atendedor]
+        );
+        const ausenciasSolapadas = await consultar(`
+          SELECT id_ausencia
+          FROM ausencia_atendedor
+          WHERE id_atendedor = ? AND fecha_inicio <= ? AND fecha_termino >= ?
+          FOR UPDATE
+        `, [solicitud.id_atendedor, solicitud.fecha_termino, solicitud.fecha_inicio]);
+        if (ausenciasSolapadas.length > 0) {
+          return {
+            errorStatus: 409,
+            error: 'El periodo solicitado se cruza con una licencia o ausencia ya registrada.'
+          };
+        }
+
+        const tipoAusencia = solicitud.tipo_solicitud === 'Dia libre'
+          ? 'dia_libre'
+          : solicitud.tipo_solicitud === 'Vacaciones'
+            ? 'vacaciones'
+            : 'licencia_medica';
+        await consultar(`
+          INSERT INTO ausencia_atendedor (id_atendedor, tipo, fecha_inicio, fecha_termino, observacion)
+          VALUES (?, ?, ?, ?, ?)
+        `, [
+          solicitud.id_atendedor,
+          tipoAusencia,
+          solicitud.fecha_inicio,
+          solicitud.fecha_termino,
+          `Solicitud aprobada #${idSolicitud}`
+        ]);
+      }
+
+      await consultar(`
+        UPDATE solicituddialibre
+        SET estado_solicitud = ?, id_administrador = ?
+        WHERE id_solicitud = ? AND estado_solicitud = 'Pendiente'
+      `, [estado, req.auth.idAdministrador, idSolicitud]);
+      const mensaje = estado === 'Aprobada'
+        ? `Tu solicitud (${solicitud.fecha_inicio} al ${solicitud.fecha_termino}) fue aprobada y se aplicó a tu calendario.`
+        : `Tu solicitud (${solicitud.fecha_inicio} al ${solicitud.fecha_termino}) fue rechazada.`;
+      const destinatarios = await registrarNotificaciones(
+        consultar,
+        [solicitud.id_usuario],
+        'cambio',
+        mensaje
+      );
+      return { idUsuario: destinatarios[0] };
+    }).then(resultado => {
+      if (resultado.errorStatus) {
+        return res.status(resultado.errorStatus).json({ error: resultado.error });
+      }
+      emitirActualizacionNotificaciones(resultado.idUsuario);
+      res.json({ success: true });
+    }).catch(err => {
+      console.error('Error al resolver una solicitud de días libres:', err);
+      res.status(500).json({ error: 'No se pudo responder la solicitud ni actualizar el calendario.' });
+    });
     return;
   }
 
   const { tipo, fecha_inicio, fecha_fin, motivo } = req.body;
   const motivoLimpio = typeof motivo === 'string' ? motivo.trim() : '';
-  if (!['Dia libre', 'Licencia'].includes(tipo) ||
+  if (!['Dia libre', 'Vacaciones', 'Licencia'].includes(tipo) ||
       !fechaISOValida(fecha_inicio) || !fechaISOValida(fecha_fin) || fecha_fin < fecha_inicio ||
       !motivoLimpio) {
     return res.status(400).json({ error: 'Completa la solicitud con valores válidos.' });
@@ -1116,13 +2139,24 @@ app.delete('/api/solicitudes/:id', autenticar, (req, res) => {
 
 app.delete('/api/administradores/:id', autenticar, soloAdministrador, (req, res) => {
   const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: 'El identificador del administrador no es válido.' });
+  }
   if (id === Number(req.auth.idAdministrador)) {
     return res.status(409).json({ error: 'No puedes archivar tu propia cuenta de administrador.' });
   }
 
-  db.query('SELECT activo FROM administrador WHERE id_administrador = ?', [id], (errFind, rows) => {
+  db.query(`
+    SELECT activo,
+           id_administrador = (SELECT MIN(id_administrador) FROM administrador) AS es_general
+    FROM administrador
+    WHERE id_administrador = ?
+  `, [id], (errFind, rows) => {
     if (errFind) return res.status(500).json({ error: 'No se pudo validar el administrador.' });
     if (rows.length === 0 || !rows[0].activo) return res.status(404).json({ error: 'Administrador activo no encontrado.' });
+    if (Boolean(rows[0].es_general)) {
+      return res.status(409).json({ error: 'La cuenta del administrador general no se puede archivar.' });
+    }
     db.query('SELECT COUNT(*) AS total FROM administrador WHERE activo = 1', (errCount, counts) => {
       if (errCount) return res.status(500).json({ error: 'No se pudo validar la cantidad de administradores activos.' });
       if (counts[0].total <= 1) {

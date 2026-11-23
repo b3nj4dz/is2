@@ -9,7 +9,86 @@
   <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
   <!-- CSS Personalizado -->
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="style.css">
+  <style>
+    @media print {
+      @page {
+        size: landscape;
+        margin: 12mm;
+      }
+
+      body {
+        display: block !important;
+        background: white !important;
+      }
+
+      body * {
+        visibility: hidden !important;
+      }
+
+      #sec-app,
+      #sec-turnos,
+      #sec-turnos * {
+        visibility: visible !important;
+      }
+
+      #sec-app {
+        display: block !important;
+        min-height: 0 !important;
+      }
+
+      #sec-turnos {
+        display: block !important;
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        margin: 0 !important;
+        padding: 0 !important;
+        border: 0 !important;
+        box-shadow: none !important;
+      }
+
+      #layout-cuadrante {
+        display: block !important;
+      }
+
+      #contenido-cuadrante {
+        width: 100% !important;
+      }
+
+      #panel-controles-cuadrante {
+        display: none !important;
+      }
+
+      #sec-turnos .overflow-x-auto {
+        overflow: visible !important;
+        border: 0 !important;
+      }
+
+      #sec-turnos table {
+        width: 100%;
+        font-size: 9pt;
+      }
+
+      #sec-turnos th,
+      #sec-turnos td {
+        padding: 5px !important;
+      }
+
+      #sec-turnos select,
+      #sec-turnos select option {
+        color: #0f172a !important;
+        background: white !important;
+      }
+
+      #cnt-btn-auto,
+      #form-cobertura,
+      #btn-exportar-pdf {
+        display: none !important;
+      }
+    }
+  </style>
 </head>
 <body class="bg-slate-100 text-slate-800 flex flex-col min-h-screen">
 
@@ -70,121 +149,251 @@
   </div>
 
   <!-- CONTENEDOR PRINCIPAL DEL SISTEMA -->
-  <div id="sec-app" class="hidden flex-1 flex flex-col">
+  <div id="sec-app" class="hidden flex-1 flex w-full min-w-0 flex-col">
     <!-- HEADER CORPORATIVO COPEC -->
-    <header class="bg-red-700 text-white shadow">
-      <div class="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
-        <div class="flex items-center space-x-3">
+    <header class="w-full bg-red-700 text-white shadow">
+      <div class="max-w-screen-2xl w-full mx-auto px-3 py-2 sm:px-4 sm:py-0 min-h-16 sm:h-16 flex flex-wrap items-center justify-between gap-y-2">
+        <div class="flex min-w-0 items-center space-x-2 sm:space-x-3">
           <div class="bg-white text-red-700 font-black px-2.5 py-1 rounded text-xl tracking-wider">COPEC</div>
-          <div>
+          <div class="min-w-0">
             <h1 class="font-bold text-base leading-tight">Gestión de Turnos</h1>
-            <p class="text-[11px] text-red-100 font-medium" id="usuario-sesion-txt">Panel de Administración</p>
+            <p class="max-w-[135px] truncate text-[11px] text-red-100 font-medium sm:max-w-none" id="usuario-sesion-txt">Panel de Administración</p>
           </div>
         </div>
-        <div class="flex items-center gap-3">
-          <button onclick="compartirEnlace()" class="bg-red-800 hover:bg-red-900 text-white px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition">
-            <i data-lucide="share-2" class="w-3.5 h-3.5"></i> Compartir Horario
+        <div class="flex shrink-0 items-center gap-1.5 sm:gap-3">
+          <button id="btn-notificaciones" type="button" onclick="togglePanelNotificaciones()" aria-controls="panel-notificaciones" aria-expanded="false" class="hidden relative rounded-lg bg-red-800 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-red-900">
+            <span class="flex items-center gap-1.5">
+              <i data-lucide="bell" class="h-3.5 w-3.5"></i>
+              <span class="hidden sm:inline">Notificaciones</span>
+            </span>
+            <span id="insignia-notificaciones" class="hidden absolute -right-1 -top-1 min-w-4 rounded-full bg-amber-300 px-1 text-[10px] font-black leading-4 text-slate-900"></span>
           </button>
-          <button onclick="cerrarSesion()" class="bg-slate-900 hover:bg-black text-white px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition">
+          <button id="btn-exportar-pdf" type="button" onclick="exportarHorarioPDF()" class="bg-red-800 hover:bg-red-900 text-white px-2 py-1.5 text-[10px] sm:px-3 sm:text-xs rounded-lg font-semibold flex items-center gap-1.5 transition">
+            <i data-lucide="file-down" class="w-3.5 h-3.5"></i> Exportar PDF
+          </button>
+          <button onclick="cerrarSesion()" class="bg-slate-900 hover:bg-black text-white px-2 py-1.5 text-[10px] sm:px-3 sm:text-xs rounded-lg font-semibold flex items-center gap-1.5 transition">
             <i data-lucide="log-out" class="w-3.5 h-3.5"></i> Salir
           </button>
         </div>
       </div>
     </header>
 
+    <aside id="panel-notificaciones" aria-labelledby="titulo-notificaciones" class="hidden fixed right-4 top-20 z-50 w-[calc(100%-2rem)] max-w-sm overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+      <div class="flex items-center justify-between border-b border-slate-200 p-3">
+        <h2 id="titulo-notificaciones" class="text-sm font-bold text-slate-800">Notificaciones</h2>
+        <button id="btn-marcar-notificaciones-leidas" type="button" onclick="marcarNotificacionesLeidas()" class="hidden text-[11px] font-semibold text-red-700 hover:underline">Marcar todas como leídas</button>
+      </div>
+      <div id="lista-notificaciones" class="max-h-80 overflow-y-auto text-xs text-slate-500" aria-live="polite">
+        Cargando notificaciones...
+      </div>
+    </aside>
+
     <!-- CONTENIDO PRINCIPAL -->
-    <main class="flex-1 max-w-6xl w-full mx-auto p-4 space-y-4">
+    <main class="flex-1 max-w-screen-2xl w-full min-w-0 mx-auto p-3 sm:p-4 space-y-4">
+      <div id="banner-conexion" role="status" aria-live="polite" class="hidden rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-900">
+        Se perdió la conexión con el servidor. Se conserva la información visible y se reintentará automáticamente.
+      </div>
 
       <!-- Navegación por Pestañas -->
-      <div class="flex border-b border-slate-200 bg-white rounded-t-xl px-2 pt-2 shadow-sm">
-        <button onclick="cambiarTab('turnos')" id="tab-turnos" class="px-4 py-2.5 text-xs sm:text-sm font-bold border-b-2 border-red-600 text-red-600 flex items-center gap-2 transition">
+      <div class="grid grid-cols-2 sm:flex sm:flex-wrap border-b border-slate-200 bg-white rounded-t-xl px-2 pt-2 shadow-sm">
+        <button onclick="cambiarTab('turnos')" id="tab-turnos" class="w-full sm:w-auto px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-bold border-b-2 border-red-600 text-red-600 flex items-center gap-2 transition">
           <i data-lucide="calendar" class="w-4 h-4"></i> Cuadrante de Turnos
         </button>
-        <button onclick="cambiarTab('empleados')" id="tab-empleados" class="px-4 py-2.5 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-500 hover:text-slate-700 flex items-center gap-2 transition">
+        <button onclick="cambiarTab('empleados')" id="tab-empleados" class="w-full sm:w-auto px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-500 hover:text-slate-700 flex items-center gap-2 transition">
           <i data-lucide="users" class="w-4 h-4"></i> Personal y Licencias
         </button>
-        <button onclick="cambiarTab('asistencia')" id="tab-asistencia" class="px-4 py-2.5 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-500 hover:text-slate-700 flex items-center gap-2 transition">
+        <button onclick="cambiarTab('administracion')" id="tab-administracion" class="hidden w-full sm:w-auto px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-500 hover:text-slate-700 flex items-center gap-2 transition">
+          <i data-lucide="shield-check" class="w-4 h-4"></i> Administración
+        </button>
+        <button onclick="cambiarTab('asistencia')" id="tab-asistencia" class="w-full sm:w-auto px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-500 hover:text-slate-700 flex items-center gap-2 transition">
           <i data-lucide="file-spreadsheet" class="w-4 h-4"></i> Libro de Asistencia
         </button>
-        <button onclick="cambiarTab('solicitudes')" id="tab-solicitudes" class="px-4 py-2.5 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-500 hover:text-slate-700 flex items-center gap-2 transition">
+        <button onclick="cambiarTab('solicitudes')" id="tab-solicitudes" class="w-full sm:w-auto px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-bold border-b-2 border-transparent text-slate-500 hover:text-slate-700 flex items-center gap-2 transition">
           <i data-lucide="calendar-clock" class="w-4 h-4"></i> Solicitudes
         </button>
       </div>
 
       <!-- PESTAÑA 1: CUADRANTE DE TURNOS -->
       <section id="sec-turnos" class="bg-white p-4 rounded-b-xl rounded-tr-xl border border-slate-200 shadow-sm space-y-4">
-        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-slate-50 p-3.5 rounded-lg border border-slate-200">
-          <div>
-            <h2 class="font-bold text-sm text-slate-800">Distribución Semanal de Atendedores</h2>
-            <p class="text-xs text-slate-500" id="cuadrante-subtitulo">Selecciona el turno directamente en cada casilla para ajustar la asignación.</p>
-          </div>
-          <div class="flex items-center gap-2" id="cnt-btn-auto">
-            <button onclick="generarTurnosAuto()" class="bg-red-600 hover:bg-red-700 text-white font-bold px-3.5 py-2 rounded-lg text-xs flex items-center gap-1.5 shadow-sm transition">
-              <i data-lucide="zap" class="w-4 h-4"></i> Generar Automáticamente
-            </button>
-          </div>
-        </div>
+        <div id="layout-cuadrante" class="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
+          <div id="contenido-cuadrante" class="xl:col-span-9 order-1 min-w-0 space-y-3">
+            <div>
+              <h2 class="font-bold text-sm text-slate-800">Distribución Semanal de Atendedores</h2>
+              <p class="text-xs text-slate-500" id="cuadrante-subtitulo">Selecciona el turno directamente en cada casilla para ajustar la asignación.</p>
+              <p id="resumen-semana-cuadrante" class="mt-1 text-[11px] text-slate-500"></p>
+            </div>
 
-        <div class="flex flex-wrap gap-2 text-[11px] font-semibold text-slate-600">
-          <span class="px-2 py-1 rounded bg-amber-100 text-amber-800 border border-amber-300">Mañana (07:00 - 15:00)</span>
-          <span class="px-2 py-1 rounded bg-blue-100 text-blue-800 border border-blue-300">Tarde (15:00 - 23:00)</span>
-          <span class="px-2 py-1 rounded bg-purple-100 text-purple-800 border border-purple-300">Noche (23:00 - 07:00)</span>
-          <span class="px-2 py-1 rounded bg-slate-100 text-slate-600 border border-slate-300">Libre (Descanso)</span>
-        </div>
+            <div class="flex flex-wrap gap-2 text-[11px] font-semibold text-slate-600">
+              <span class="px-2 py-1 rounded bg-amber-100 text-amber-800 border border-amber-300">Mañana <span data-turno-horario="mañana"></span></span>
+              <span class="px-2 py-1 rounded bg-blue-100 text-blue-800 border border-blue-300">Tarde <span data-turno-horario="tarde"></span></span>
+              <span class="px-2 py-1 rounded bg-purple-100 text-purple-800 border border-purple-300">Noche <span data-turno-horario="noche"></span></span>
+              <span class="px-2 py-1 rounded bg-slate-100 text-slate-600 border border-slate-300">Libre (Descanso)</span>
+            </div>
 
-        <div class="overflow-x-auto rounded-lg border border-slate-200">
-          <table class="w-full text-left text-xs border-collapse">
-            <thead>
-              <tr class="bg-slate-800 text-white">
-                <th class="p-3 font-bold w-44">Atendedor</th>
-                <th class="p-3 font-semibold text-center min-w-[110px]">Lunes</th>
-                <th class="p-3 font-semibold text-center min-w-[110px]">Martes</th>
-                <th class="p-3 font-semibold text-center min-w-[110px]">Miércoles</th>
-                <th class="p-3 font-semibold text-center min-w-[110px]">Jueves</th>
-                <th class="p-3 font-semibold text-center min-w-[110px]">Viernes</th>
-                <th class="p-3 font-semibold text-center min-w-[110px]">Sábado</th>
-                <th class="p-3 font-semibold text-center min-w-[110px]">Domingo</th>
-              </tr>
-            </thead>
-            <tbody id="tabla-turnos-body" class="divide-y divide-slate-200 bg-white"></tbody>
-          </table>
+            <div class="overflow-x-auto rounded-lg border border-slate-200">
+              <table class="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr class="bg-slate-800 text-white">
+                    <th class="p-3 font-bold w-44">Atendedor</th>
+                    <th class="p-3 font-semibold text-center min-w-[110px]">Lunes<br><span id="fecha-cuadrante-0" class="text-[10px] font-normal text-slate-300"></span></th>
+                    <th class="p-3 font-semibold text-center min-w-[110px]">Martes<br><span id="fecha-cuadrante-1" class="text-[10px] font-normal text-slate-300"></span></th>
+                    <th class="p-3 font-semibold text-center min-w-[110px]">Miércoles<br><span id="fecha-cuadrante-2" class="text-[10px] font-normal text-slate-300"></span></th>
+                    <th class="p-3 font-semibold text-center min-w-[110px]">Jueves<br><span id="fecha-cuadrante-3" class="text-[10px] font-normal text-slate-300"></span></th>
+                    <th class="p-3 font-semibold text-center min-w-[110px]">Viernes<br><span id="fecha-cuadrante-4" class="text-[10px] font-normal text-slate-300"></span></th>
+                    <th class="p-3 font-semibold text-center min-w-[110px]">Sábado<br><span id="fecha-cuadrante-5" class="text-[10px] font-normal text-slate-300"></span></th>
+                    <th class="p-3 font-semibold text-center min-w-[110px]">Domingo<br><span id="fecha-cuadrante-6" class="text-[10px] font-normal text-slate-300"></span></th>
+                  </tr>
+                </thead>
+                <tbody id="tabla-turnos-body" class="divide-y divide-slate-200 bg-white"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <aside id="panel-controles-cuadrante" class="xl:col-span-3 order-2 min-w-0 space-y-3">
+            <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <label for="fecha-semana-cuadrante" class="block text-[11px] font-semibold text-slate-600">
+                Semana que contiene la fecha
+                <input id="fecha-semana-cuadrante" type="date" onchange="cambiarSemanaCuadrante()" class="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs">
+              </label>
+            </div>
+
+            <div id="cnt-btn-auto" class="space-y-2">
+              <div data-temporada-admin class="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <form onsubmit="guardarParametrosTemporada(event)" class="space-y-2">
+                  <label for="temporada-modo" class="block text-[11px] font-bold text-slate-600">Temporada</label>
+                  <select id="temporada-modo" class="w-full text-xs border border-slate-300 rounded px-2 py-1.5 bg-white">
+                    <option value="normal">Modo Normal</option>
+                    <option value="verano">Modo Verano</option>
+                  </select>
+                  <div class="grid grid-cols-2 gap-2">
+                    <label for="temporada-horas-normal" class="text-[11px] font-semibold text-slate-600">
+                      Normal (h)
+                      <input id="temporada-horas-normal" type="number" min="8" max="12" step="1" required class="mt-1 w-full text-xs border border-slate-300 rounded px-2 py-1.5">
+                    </label>
+                    <label for="temporada-horas-verano" class="text-[11px] font-semibold text-slate-600">
+                      Verano (h)
+                      <input id="temporada-horas-verano" type="number" min="8" max="12" step="1" required class="mt-1 w-full text-xs border border-slate-300 rounded px-2 py-1.5">
+                    </label>
+                  </div>
+                  <button type="submit" class="w-full bg-slate-700 hover:bg-slate-800 text-white font-bold px-2.5 py-1.5 rounded text-[11px]">Guardar temporada</button>
+                </form>
+              </div>
+              <button onclick="generarTurnosAuto()" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold px-3.5 py-2 rounded-lg text-xs flex items-center justify-center gap-1.5 shadow-sm transition">
+                <i data-lucide="zap" class="w-4 h-4"></i> Generar Automáticamente
+              </button>
+            </div>
+
+            <span id="temporada-estado" class="block text-[11px] font-bold text-slate-700 bg-white border border-slate-200 rounded px-2.5 py-2"></span>
+            <p id="aviso-solapamiento-temporada" role="status" class="hidden rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] font-semibold text-amber-800"></p>
+
+            <div id="panel-cobertura" class="hidden space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <form id="form-cobertura" onsubmit="guardarParametrosCobertura(event)" class="space-y-3">
+                <div>
+                  <h3 class="text-xs font-bold text-slate-800">Mínimos de cobertura por turno</h3>
+                  <p class="text-[11px] text-slate-500">La alerta se calcula por día; el personal con licencia no cuenta como disponible.</p>
+                </div>
+                <div class="grid grid-cols-3 gap-2">
+                  <label class="text-[11px] font-semibold text-slate-700">
+                    Mañana
+                    <input id="cobertura-manana" type="number" min="1" max="500" step="1" value="2" required class="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1.5">
+                  </label>
+                  <label class="text-[11px] font-semibold text-slate-700">
+                    Tarde
+                    <input id="cobertura-tarde" type="number" min="1" max="500" step="1" value="1" required class="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1.5">
+                  </label>
+                  <label class="text-[11px] font-semibold text-slate-700">
+                    Noche
+                    <input id="cobertura-noche" type="number" min="1" max="500" step="1" value="2" required class="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1.5">
+                  </label>
+                </div>
+                <button type="submit" class="w-full rounded-lg bg-slate-700 px-3 py-2 text-xs font-bold text-white transition hover:bg-slate-800">Guardar mínimos</button>
+              </form>
+              <div id="alerta-cobertura" class="hidden" role="status" aria-live="polite"></div>
+            </div>
+          </aside>
         </div>
       </section>
 
       <!-- PESTAÑA 2: GESTIÓN DE PERSONAL Y LICENCIAS -->
       <section id="sec-empleados" class="bg-white p-4 rounded-b-xl rounded-tr-xl border border-slate-200 shadow-sm space-y-4 hidden">
-        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-          <div>
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+          <div class="lg:col-span-5 space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
             <h2 class="font-bold text-sm text-slate-800">Nómina de Personal</h2>
-            <p class="text-xs text-slate-500">Administra atendedores y registra licencias o incapacidades médicas.</p>
-          </div>
-
-          <div class="flex flex-wrap items-center gap-3 w-full sm:w-auto">
-            <!-- BUSCADOR CON LUPA -->
-            <div class="relative flex-1 sm:w-64">
-              <i data-lucide="search" class="w-4 h-4 absolute left-3 top-2.5 text-slate-400"></i>
-              <input type="text" id="input-buscar-empleado" oninput="filtrarEmpleados()" placeholder="Buscar por nombre o RUT..." class="w-full text-xs pl-9 pr-3 py-2 border border-slate-300 rounded-lg bg-slate-50 focus:bg-white focus:ring-2 focus:ring-red-600 outline-none transition">
+            <p class="text-xs text-slate-500">Administra atendedores y registra licencias médicas o vacaciones con fechas.</p>
+            <div class="space-y-2">
+              <div class="relative">
+                <i data-lucide="search" class="w-4 h-4 absolute left-3 top-2.5 text-slate-400"></i>
+                <input type="text" id="input-buscar-empleado" oninput="filtrarEmpleados()" placeholder="Buscar por nombre o RUT..." class="w-full text-xs pl-9 pr-3 py-2 border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-red-600 outline-none transition">
+              </div>
+              <button onclick="agregarEmpleadoModal()" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold px-3 py-2 rounded-lg text-xs flex items-center justify-center gap-1.5 shadow-sm transition">
+                <i data-lucide="plus" class="w-4 h-4"></i> Agregar Atendedor
+              </button>
             </div>
 
-            <button onclick="agregarEmpleadoModal()" class="bg-red-600 hover:bg-red-700 text-white font-bold px-3.5 py-2 rounded-lg text-xs flex items-center gap-1.5 shadow-sm transition">
-              <i data-lucide="plus" class="w-4 h-4"></i> Agregar Atendedor
-            </button>
+            <div class="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+              <table class="w-full text-left text-xs">
+                <thead class="bg-slate-100 font-bold text-slate-700 border-b border-slate-200">
+                  <tr>
+                    <th class="p-2">Atendedor</th>
+                    <th class="p-2">Estado</th>
+                    <th class="p-2 text-center">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody id="tabla-empleados-body" class="divide-y divide-slate-200 bg-white"></tbody>
+              </table>
+            </div>
           </div>
-        </div>
 
-        <div class="overflow-x-auto rounded-lg border border-slate-200">
-          <table class="w-full text-left text-xs">
-            <thead class="bg-slate-100 font-bold text-slate-700 border-b border-slate-200">
-              <tr>
-                <th class="p-3">RUT</th>
-                <th class="p-3">Nombre Completo</th>
-                <th class="p-3">Correo</th>
-                <th class="p-3">Estado</th>
-                <th class="p-3 text-center">Acciones</th>
-              </tr>
-            </thead>
-            <tbody id="tabla-empleados-body" class="divide-y divide-slate-200 bg-white"></tbody>
-          </table>
+          <div id="panel-gestion-ausencias" class="lg:col-span-7 space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div>
+              <h3 class="text-xs font-bold text-slate-800">Licencias médicas y vacaciones</h3>
+              <p class="text-[11px] text-slate-500">Las fechas de ausencia reemplazan el turno solo en los días correspondientes; el patrón semanal se conserva para las demás semanas.</p>
+            </div>
+            <form id="form-ausencia" onsubmit="guardarAusencia(event)" class="flex flex-wrap items-end gap-3">
+              <label class="min-w-40 flex-1 text-[11px] font-semibold text-slate-700">
+                Atendedor
+                <select id="ausencia-atendedor" required class="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-2"></select>
+              </label>
+              <label class="text-[11px] font-semibold text-slate-700">
+                Tipo
+                <select id="ausencia-tipo" required class="mt-1 block rounded border border-slate-300 bg-white px-2 py-2">
+                  <option value="licencia_medica">Licencia médica</option>
+                  <option value="vacaciones">Vacaciones</option>
+                  <option value="dia_libre">Día libre</option>
+                </select>
+              </label>
+              <label class="text-[11px] font-semibold text-slate-700">
+                Desde
+                <input id="ausencia-inicio" type="date" required class="mt-1 block rounded border border-slate-300 bg-white px-2 py-2">
+              </label>
+              <label class="text-[11px] font-semibold text-slate-700">
+                Hasta
+                <input id="ausencia-termino" type="date" required class="mt-1 block rounded border border-slate-300 bg-white px-2 py-2">
+              </label>
+              <label class="min-w-40 flex-1 text-[11px] font-semibold text-slate-700">
+                Observación (opcional)
+                <input id="ausencia-observacion" type="text" maxlength="255" class="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-2">
+              </label>
+              <div class="flex gap-2">
+                <button id="btn-guardar-ausencia" type="submit" class="rounded bg-red-600 px-3 py-2 text-[11px] font-bold text-white hover:bg-red-700">Registrar novedad</button>
+                <button id="btn-cancelar-edicion-ausencia" type="button" onclick="cancelarEdicionAusencia()" class="hidden rounded border border-slate-300 bg-white px-3 py-2 text-[11px] font-bold text-slate-700 hover:bg-slate-100">Cancelar</button>
+              </div>
+            </form>
+            <div class="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+              <table class="w-full text-left text-xs">
+                <thead class="bg-slate-100 font-bold text-slate-700">
+                  <tr>
+                    <th class="p-2">Atendedor</th>
+                    <th class="p-2">Tipo</th>
+                    <th class="p-2">Periodo</th>
+                    <th class="p-2">Observación</th>
+                    <th class="p-2 text-center">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody id="tabla-ausencias-body" class="divide-y divide-slate-200"></tbody>
+              </table>
+            </div>
+          </div>
         </div>
 
         <dialog id="modal-atendedor" class="w-[calc(100%-2rem)] max-w-lg rounded-2xl border-0 p-0 shadow-2xl backdrop:bg-slate-900/50">
@@ -226,8 +435,10 @@
           </form>
         </dialog>
 
-        <!-- SECCIÓN: GESTIÓN DE ADMINISTRADORES -->
-        <section id="sec-administradores" class="bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm space-y-4">
+      </section>
+
+      <section id="sec-administracion" class="bg-white p-4 rounded-b-xl rounded-tr-xl border border-slate-200 shadow-sm space-y-4 hidden">
+        <div class="bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm space-y-4">
           <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
             <div>
               <h2 class="font-bold text-sm text-slate-800">Gestión de Administradores</h2>
@@ -274,20 +485,64 @@
               </table>
             </div>
           </div>
-        </section>
+        </div>
+
+        <dialog id="modal-administrador" class="w-[calc(100%-2rem)] max-w-lg rounded-2xl border-0 p-0 shadow-2xl backdrop:bg-slate-900/50">
+          <form id="form-administrador" onsubmit="guardarAdministrador(event)" class="space-y-5 p-6">
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <h2 id="titulo-modal-administrador" class="text-lg font-bold text-slate-800">Agregar administrador</h2>
+                <p id="descripcion-modal-administrador" class="mt-1 text-xs text-slate-500">Completa los datos para crear una cuenta administradora.</p>
+              </div>
+              <button type="button" onclick="cerrarModalAdministrador()" aria-label="Cerrar" class="rounded-lg px-2 py-1 text-xl leading-none text-slate-500 hover:bg-slate-100 hover:text-slate-800">&times;</button>
+            </div>
+
+            <div class="space-y-3 text-xs">
+              <div>
+                <label for="administrador-nombre" class="mb-1 block font-bold text-slate-700">Nombre completo</label>
+                <input id="administrador-nombre" type="text" maxlength="20" required autocomplete="name" class="w-full rounded-lg border border-slate-300 bg-slate-50 p-3 outline-none transition focus:bg-white focus:ring-2 focus:ring-red-600">
+              </div>
+              <div>
+                <label for="administrador-rut" class="mb-1 block font-bold text-slate-700">RUT</label>
+                <input id="administrador-rut" type="text" maxlength="15" required placeholder="12.345.678-9" class="w-full rounded-lg border border-slate-300 bg-slate-50 p-3 outline-none transition focus:bg-white focus:ring-2 focus:ring-red-600">
+              </div>
+              <div>
+                <label for="administrador-email" class="mb-1 block font-bold text-slate-700">Correo electrónico</label>
+                <input id="administrador-email" type="email" maxlength="100" required autocomplete="email" class="w-full rounded-lg border border-slate-300 bg-slate-50 p-3 outline-none transition focus:bg-white focus:ring-2 focus:ring-red-600">
+              </div>
+              <div>
+                <label for="administrador-departamento" class="mb-1 block font-bold text-slate-700">Departamento</label>
+                <input id="administrador-departamento" type="text" maxlength="100" required class="w-full rounded-lg border border-slate-300 bg-slate-50 p-3 outline-none transition focus:bg-white focus:ring-2 focus:ring-red-600">
+              </div>
+              <div id="grupo-password-administrador">
+                <label for="administrador-password" class="mb-1 block font-bold text-slate-700">Contraseña inicial</label>
+                <input id="administrador-password" type="password" minlength="8" maxlength="128" required autocomplete="new-password" class="w-full rounded-lg border border-slate-300 bg-slate-50 p-3 outline-none transition focus:bg-white focus:ring-2 focus:ring-red-600">
+                <p class="mt-1 text-slate-500">8–128 caracteres, con mayúscula, minúscula, número y símbolo.</p>
+              </div>
+            </div>
+
+            <p id="administrador-error" role="alert" class="hidden rounded-lg bg-rose-50 p-3 text-xs font-semibold text-rose-700"></p>
+
+            <div class="flex justify-end gap-2">
+              <button type="button" onclick="cerrarModalAdministrador()" class="rounded-lg border border-slate-300 px-4 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-100">Cancelar</button>
+              <button id="btn-guardar-administrador" type="submit" class="rounded-lg bg-red-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-red-700">Guardar administrador</button>
+            </div>
+          </form>
+        </dialog>
       </section>
 
-      <!-- PESTAÑA 3: SOLICITUDES -->
+      <!-- PESTAÑA 5: SOLICITUDES -->
       <section id="sec-solicitudes" class="bg-white p-4 rounded-b-xl rounded-tr-xl border border-slate-200 shadow-sm space-y-4 hidden">
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
           <form id="form-solicitud" onsubmit="crearSolicitud(event)" class="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3 text-xs">
-            <h2 class="font-bold text-sm text-slate-800">Nueva solicitud</h2>
+            <h2 id="titulo-form-solicitud" class="font-bold text-sm text-slate-800">Nueva solicitud</h2>
 
             <div>
               <label class="font-bold block mb-1 text-slate-700">Tipo de solicitud</label>
               <select id="solicitud-tipo" required class="w-full p-2 border rounded-md bg-white">
                 <option value="Dia libre">Día libre</option>
-                <option value="Licencia">Licencia</option>
+                <option value="Vacaciones">Vacaciones</option>
+                <option value="Licencia">Licencia médica (solicitudes existentes)</option>
               </select>
             </div>
             <div class="grid grid-cols-2 gap-2">
@@ -304,13 +559,16 @@
               <label class="font-bold block mb-1 text-slate-700">Motivo</label>
               <textarea id="solicitud-motivo" rows="3" required placeholder="Describe el motivo de la solicitud" class="w-full p-2 border rounded-md bg-white resize-none"></textarea>
             </div>
-            <button type="submit" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 rounded-lg transition shadow-sm">
+            <div class="flex gap-2">
+              <button id="btn-cancelar-edicion-solicitud" type="button" onclick="cancelarEdicionSolicitud()" class="hidden flex-1 border border-slate-300 py-2 rounded-lg font-bold text-slate-700">Cancelar edición</button>
+              <button id="btn-enviar-solicitud" type="submit" class="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-2 rounded-lg transition shadow-sm">
               Enviar solicitud
-            </button>
+              </button>
+            </div>
           </form>
 
-          <div class="md:col-span-2 border rounded-xl overflow-hidden">
-            <table class="w-full text-left text-xs">
+          <div class="md:col-span-2 overflow-x-auto rounded-xl border">
+            <table class="w-full min-w-[36rem] text-left text-xs">
               <thead class="bg-slate-100 font-bold border-b border-slate-200">
                 <tr>
                   <th id="col-solicitud-persona" class="p-3">Persona</th>
@@ -326,7 +584,7 @@
         </div>
       </section>
 
-      <!-- PESTAÑA 3: ASISTENCIA -->
+      <!-- PESTAÑA 4: ASISTENCIA -->
       <section id="sec-asistencia" class="bg-white p-4 rounded-b-xl rounded-tr-xl border border-slate-200 shadow-sm space-y-4 hidden">
         <div>
           <h2 class="font-bold text-sm text-slate-800">Transcripción de Libro de Asistencia Físico</h2>
@@ -361,8 +619,8 @@
             </button>
           </form>
 
-          <div class="md:col-span-2 border rounded-xl overflow-hidden">
-            <table class="w-full text-left text-xs">
+          <div class="md:col-span-2 overflow-x-auto rounded-xl border">
+            <table class="w-full min-w-[42rem] text-left text-xs">
               <thead class="bg-slate-100 font-bold border-b border-slate-200">
                 <tr>
                   <th class="p-3">Fecha</th>
@@ -387,6 +645,9 @@
     </footer>
   </div>
 
+  <script src="shift-schedule.js"></script>
+  <script src="absence-utils.js"></script>
+  <script src="schedule-generator.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

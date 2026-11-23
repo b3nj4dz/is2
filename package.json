@@ -4,7 +4,7 @@
   "description": "",
   "main": "app.js",
   "scripts": {
-    "test": "node --test password-utils.test.js",
+    "test": "node --test password-utils.test.js schedule-generator.test.js shift-schedule.test.js absence-utils.test.js",
     "start": "node server.js"
   },
   "keywords": [],
