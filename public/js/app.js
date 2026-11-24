@@ -1946,8 +1946,17 @@ async function responderSolicitud(id, estado) {
       alert(data.error || 'No se pudo actualizar la solicitud.');
       return;
     }
-    mostrarToast(`Solicitud ${estado.toLowerCase()}`);
     await cargarSolicitudes();
+    if (estado === 'Aprobada') {
+      try {
+        await cargarAusenciasBD();
+      } catch (err) {
+        console.error('La solicitud se aprobó, pero no se pudo actualizar la lista de novedades:', err);
+        alert('La solicitud se aprobó, pero no se pudo actualizar la lista de licencias y vacaciones. Recarga la página para ver los cambios.');
+        return;
+      }
+    }
+    mostrarToast(`Solicitud ${estado.toLowerCase()}`);
   } catch (err) {
     console.error('Error al responder solicitud:', err);
     alert('No se pudo conectar con el servidor.');
